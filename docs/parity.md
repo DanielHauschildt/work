@@ -52,3 +52,8 @@ test in `test/parity.test.ts` (differential against the installed try where the 
 Quirks of try kept on purpose: `--and-keys TYPE=` upper-cases the typed text; blank lines vanish in forced-colour
 non-TTY output. Picker footer hints `Tab: Scope  Ctrl-R: Move` appear only when they fit (≥ 96 columns), so at
 80 columns the screen is byte-identical to try apart from the title.
+
+Checked against a copy of the real `~/Work/tries` (compiled binary): legacy entries (plain repo at the entry root, or
+nested plain repos) are listed, resolved and rendered like try. Picker delete shows git warnings (uncommitted,
+local-only commits) on the `YES` screen and then deletes, as in try; `work rm` on the command line refuses such
+entries unless `--force`.
