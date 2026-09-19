@@ -105,6 +105,7 @@ temp file so normal stdout (e.g. `work ls --json | jq`) works through it.
 ```sh
 bun test          # unit, git integration, CLI end-to-end, differential parity vs. installed try
 bun run typecheck
+bun run e2e       # real zsh + bash sessions via expect (test/e2e), compiled binary
 ```
 
 Spec: [docs/spec.md](docs/spec.md).

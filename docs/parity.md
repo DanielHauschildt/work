@@ -45,13 +45,14 @@ test in `test/parity.test.ts` (differential against the installed try where the 
 - `test/parity.test.ts`: differential runs of the installed `try` vs `work` (25 picker key scripts, render and
   `--and-type` screens, help/version/exit codes, non-TTY, clone naming incl. URL shorthand and custom names,
   `.` / `./` / `worktree dir` incl. name versioning and non-repo folders).
-- `test/tui/try-parity.test.ts`: 29 byte-for-byte screen comparisons at several terminal sizes.
-- Real interactive zsh and bash sessions (expect, compiled binary): completion of shortcut workspaces, picker select,
-  Ctrl-T create, all-space picker, `try` shortcut, `mv` promotion following the cwd, `work -`.
+- `test/tui/try-parity.test.ts`: screen comparisons against try at several terminal sizes (search line, list
+  area, dialogs, frame count; the space-bar header, footer and create-row wording differ on purpose).
+- `test/e2e` (`bun run e2e`): real interactive zsh and bash sessions (expect, compiled binary): completion of shortcut
+  workspaces, picker select, Ctrl-T create, all-space picker, `try` shortcut, `mv` promotion following the cwd,
+  `work -`, creating a space from the `+ new` tab.
 
 Quirks of try kept on purpose: `--and-keys TYPE=` upper-cases the typed text; blank lines vanish in forced-colour
-non-TTY output. Picker footer hints `Tab: Scope  Ctrl-R: Move` appear only when they fit (≥ 96 columns), so at
-80 columns the screen is byte-identical to try apart from the title.
+non-TTY output.
 
 Checked against a copy of the real `~/Work/tries` (compiled binary): legacy workspaces (plain repo at the workspace root, or
 nested plain repos) are listed, resolved and rendered like try. Picker delete shows git warnings (uncommitted,

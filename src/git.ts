@@ -51,8 +51,8 @@ export function gitTry(dir: string, args: string[]): string | undefined {
   return r.code === 0 ? r.stdout.trim() : undefined;
 }
 
-/** A folder is a worktree when it has a `.git` file (linked worktree) or a `.git` directory (plain repo). */
-export function isWorktree(dir: string): boolean {
+/** A folder is a repo dir when it has a `.git` file (linked worktree) or a `.git` directory (plain repo). */
+export function isRepoDir(dir: string): boolean {
   return existsSync(join(dir, ".git"));
 }
 
@@ -96,7 +96,7 @@ export function findWorktrees(dir: string, depth = 2): string[] {
       } catch {
         continue;
       }
-      if (isWorktree(p)) out.push(p);
+      if (isRepoDir(p)) out.push(p);
       else if (level < depth) walk(p, level + 1);
     }
   };

@@ -1,0 +1,70 @@
+# Real interactive bash session driven by expect. Run through test/e2e/run.sh (sets $S to a fresh sandbox).
+set timeout 10
+log_user 0
+exp_internal 0
+spawn env TERM=xterm-256color WORK_TODAY=2026-09-19 SHELL=/bin/bash bash --noprofile --rcfile $env(S)/bashrc -i
+expect "\$ "
+# 1. completion of a shortcut space's workspaces
+send "tries red\t\t"
+expect -re "2026-09-01-redis-server" { send_user "OK completion: tries red<TAB> -> 2026-09-01-redis-server\n" } timeout { send_user "FAIL completion\n" }
+send "\x15"
+expect "\$ "
+# 2. picker: filter kafka + Enter -> cd
+send "tries\r"
+expect "Search:" { send_user "OK picker opened\n" } timeout { send_user "FAIL picker\n" }
+send "kafka"
+after 300
+send "\r"
+expect "\$ "
+send "pwd\r"
+expect -re "/tries/2026-09-02-kafka" { send_user "OK picker selected kafka, shell cd'd\n" } timeout { send_user "FAIL cd after select\n" }
+expect "\$ "
+# 3. picker create new via Ctrl-T
+send "tries\r"
+expect "Search:"
+send "fresh idea"
+after 300
+send "\x14"
+expect "\$ "
+send "pwd\r"
+expect -re "/tries/2026-09-19-fresh-idea" { send_user "OK ctrl-t created 2026-09-19-fresh-idea and cd'd\n" } timeout { send_user "FAIL ctrl-t\n" }
+expect "\$ "
+# 4. Tab scope switch in the picker, from tries to labs via work
+send "work\r"
+expect "Search:"
+send "autofit"
+after 300
+send "\r"
+expect "\$ "
+send "pwd\r"
+expect -re "/labs/IMG-1-autofit" { send_user "OK all-scope picker found labs workspace\n" } timeout { send_user "FAIL all-scope\n" }
+expect "\$ "
+# 5. try muscle memory + mv promote + back
+send "try new scratch && work mv labs --prefix IMG-2 && pwd\r"
+expect -re "/labs/IMG-2-scratch" { send_user "OK try shortcut + mv promote followed cwd\n" } timeout { send_user "FAIL mv\n" }
+expect "\$ "
+send "work - && pwd\r"
+expect -re "/labs/IMG-1-autofit" { send_user "OK work - returned to previous workspace\n" } timeout { send_user "FAIL back\n" }
+expect "\$ "
+# 6. + new tab: Tab past all/labs/tries, type a space name, Enter, Enter (date default), Esc
+send "work\r"
+expect "Search:"
+send "\t"
+after 150
+send "\t"
+after 150
+send "\t"
+expect "New space:"
+send "clients"
+after 300
+send "\r"
+expect "Esc Back"
+send "\r"
+after 300
+send "\x1b"
+expect "\$ "
+send "cat $env(S)/Work/clients/.space.toml\r"
+expect -re {prefix = "auto"} { send_user "OK + new tab created space clients (.space.toml)\n" } timeout { send_user "FAIL + new space\n" }
+expect "\$ "
+send "exit\r"
+expect eof
