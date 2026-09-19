@@ -2,11 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { type PickerItem, parseTestKeys, runPicker } from "../../src/tui/index.ts";
+import { type CreateOption, type PickerItem, type PickerOptions, parseTestKeys, runPicker } from "../../src/tui/index.ts";
 import { capture, pick, plain, tmpRoot, today } from "./helpers.ts";
 
 const NOW = new Date("2026-09-19T12:00:00Z");
 const HOUR = 3_600_000;
+const DATE = `${today()}-`;
 
 let root: string;
 let items: PickerItem[];
@@ -20,6 +21,10 @@ function item(space: string, basename: string, ageHours: number, extra: Partial<
 
 const chars = (s: string) => Array.from(s);
 const byName = (name: string) => items.find((i) => i.basename === name)!;
+const TWO_OPTIONS = (): CreateOption[] => [
+  { prefix: DATE, label: "" },
+  { prefix: "", label: "no date" },
+];
 
 beforeAll(() => {
   process.env.WORK_WIDTH = "80";
@@ -44,12 +49,19 @@ afterAll(() => {
 
 const base = () => ({ items, rootPath: root, now: NOW, scopes: ["*", "labs", "tries"] });
 
+const HEADER = "📁 work  ";
+
 /** Frames rendered in force-colors mode, split on the header line. */
 function frames(out: string): string[] {
   return plain(out)
-    .split("📁 Work Selector")
+    .split(HEADER)
     .slice(1)
-    .map((f) => `📁 Work Selector${f}`);
+    .map((f) => `${HEADER}${f}`);
+}
+
+/** Active tab of each frame's space bar. */
+function activeTabs(out: string): string[] {
+  return frames(out).map((f) => /\[([^\]]+)\]/.exec(f.split("\n")[0]!)![1]!);
 }
 
 describe("select and filter", () => {
@@ -73,9 +85,8 @@ describe("select and filter", () => {
     const f = frames(out);
     expect(f).toHaveLength(1);
     expect(f[0]).toContain("Search: vector-search");
-    expect(f[0]).toContain("vector-search");
     expect(f[0]).not.toContain("redis-bench");
-    expect(f[0]).toContain(`📂 Create new: ${today()}-vector-search`);
+    expect(f[0]).toContain(`📂 New tries/${DATE}vector-search`);
   });
 
   test("initialInput overrides the query", async () => {
@@ -84,34 +95,124 @@ describe("select and filter", () => {
   });
 });
 
-describe("create", () => {
-  test("Enter on Create new", async () => {
-    const { result } = await pick({ ...base(), scope: "tries", test: { keys: parseTestKeys("TYPE=ZZ TOP,ENTER") } });
-    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${today()}-ZZ-TOP` });
+describe("space bar and footer", () => {
+  test("tabs: all, spaces, + new; active one bracketed", async () => {
+    const { out } = await pick({ ...base(), scope: "tries", test: { renderOnce: true, forceColors: false } });
+    expect(out.split("\n")[0]).toBe("📁 work   all  labs [tries] + new ");
+    const all = await pick({ ...base(), scope: "*", test: { renderOnce: true } });
+    expect(all.out).toContain("\x1b[1;38;5;208m📁 work\x1b[0m\x1b[39m\x1b[49m  \x1b[1m[all]\x1b[0m\x1b[90m labs \x1b[39m");
   });
 
-  test("Create new uses prefixFor(createSpace(scope))", async () => {
+  test("elides tabs that don't fit, keeping the active one", async () => {
+    const scopes = ["*", "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"];
+    process.env.WORK_WIDTH = "40";
+    try {
+      const { out } = await pick({ ...base(), scopes, scope: "echo", test: { renderOnce: true, forceColors: false } });
+      const header = out.split("\n")[0]!;
+      expect(header).toContain("[echo]");
+      expect(header).toContain(" … ");
+      expect(header.startsWith("📁 work   … ")).toBe(true);
+      expect(Array.from(header).length + 1).toBeLessThanOrEqual(39); // 📁 is two columns
+      const first = await pick({ ...base(), scopes, scope: "*", test: { renderOnce: true, forceColors: false } });
+      expect(first.out.split("\n")[0]!.startsWith("📁 work  [all] alpha ")).toBe(true);
+      expect(first.out.split("\n")[0]!.endsWith(" … ")).toBe(true);
+    } finally {
+      process.env.WORK_WIDTH = "80";
+    }
+  });
+
+  test("Tab / Shift-Tab cycle all → spaces → + new and reset the cursor", async () => {
+    const { result, out } = await pick({
+      ...base(),
+      scope: "*",
+      test: { keys: parseTestKeys("DOWN,TAB,TAB,TAB,TAB,SHIFT-TAB,SHIFT-TAB,SHIFT-TAB,DOWN,TAB,ENTER") },
+    });
+    expect(activeTabs(out)).toEqual(["all", "all", "labs", "tries", "+ new", "all", "+ new", "tries", "labs", "labs", "tries"]);
+    // Tab after DOWN resets the cursor to the top row of the new scope
+    expect(result).toEqual({ type: "cd", path: byName("2026-09-18-redis-bench").path });
+  });
+
+  test("compact footer", async () => {
+    const { out } = await pick({ ...base(), scope: "tries", test: { renderOnce: true } });
+    expect(plain(out)).toContain("\n↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc\n");
+  });
+
+  test("all scope shows a dim space/ prefix; matching uses the basename only", async () => {
+    const { out } = await pick({ ...base(), scope: "*", test: { renderOnce: true } });
+    expect(out).toContain("\x1b[90mlabs/\x1b[39m");
+    expect(out).toContain("\x1b[90mtries/\x1b[39m\x1b[90m2026-09-18\x1b[39m");
+    expect(plain(out)).toContain("📁 labs/IMG-1234-autofit");
+
+    const q = await pick({ ...base(), scope: "*", query: "labs", test: { renderOnce: true } });
+    const p = plain(q.out);
+    expect(p).toContain("IMG-99-labs-thing");
+    expect(p).not.toContain("IMG-1234-autofit");
+  });
+
+  test("single scope shows no prefix", async () => {
+    const { out } = await pick({ ...base(), scope: "labs", test: { renderOnce: true } });
+    expect(plain(out)).toContain("📁 IMG-1234-autofit");
+    expect(plain(out)).not.toContain("labs/");
+  });
+});
+
+describe("create", () => {
+  test("Enter on a create row", async () => {
+    const { result } = await pick({ ...base(), scope: "tries", test: { keys: parseTestKeys("TYPE=ZZ TOP,ENTER") } });
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}ZZ-TOP` });
+  });
+
+  test("one row per create option, labels right-aligned", async () => {
     const { result, out } = await pick({
       ...base(),
       scope: "labs",
-      prefixFor: (space) => (space === "labs" ? "IMG-1234-" : "x-"),
-      createSpace: (scope) => (scope === "*" ? "tries" : scope),
-      test: { keys: [...chars("zzz"), "\r"] },
+      createOptions: (space) =>
+        space === "labs"
+          ? [
+              { prefix: "IMG-1-", label: "" },
+              { prefix: "", label: "no date" },
+              { prefix: DATE, label: "date" },
+            ]
+          : [],
+      test: { keys: [...chars("zzz"), "\x1b[B", "\r"] },
     });
-    expect(result).toEqual({ type: "mkdir", space: "labs", name: "IMG-1234-zzz" });
-    expect(plain(out)).toContain("📂 Create new: IMG-1234-zzz");
+    expect(result).toEqual({ type: "mkdir", space: "labs", name: "zzz" });
+    const lines = frames(out)[3]!.split("\n");
+    expect(lines).toContain("→ 📂 New labs/IMG-1-zzz");
+    const noDate = lines.find((l) => l.includes("New labs/zzz"))!;
+    expect(noDate).toBe(`  📂 New labs/zzz${" ".repeat(80 - 1 - 7 - 5 - 12)}no date`);
+    expect(lines.find((l) => l.includes(`New labs/${DATE}zzz`))!.endsWith(" date")).toBe(true);
   });
 
-  test("all scope creates in the default space", async () => {
-    const { result } = await pick({ ...base(), scope: "*", prefixFor: () => "", test: { keys: [...chars("qq"), "\x14"] } });
-    expect(result).toEqual({ type: "mkdir", space: "tries", name: "qq" });
+  test("create rows follow the matches after a blank line", async () => {
+    const { out } = await pick({ ...base(), scope: "tries", createOptions: TWO_OPTIONS, test: { keys: [..."e", "\x1b[B"] } });
+    const f = frames(out).at(-1)!;
+    expect(f).toContain("notes");
+    expect(f).toMatch(/notes[^\n]*\n {2}📂 New tries\//);
+  });
+
+  test("Ctrl-T uses the first option", async () => {
+    const { result } = await pick({ ...base(), scope: "tries", createOptions: TWO_OPTIONS, test: { keys: [..."qq", "\x14"] } });
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}qq` });
+  });
+
+  test("all scope creates in defaultSpace", async () => {
+    const { result, out } = await pick({
+      ...base(),
+      scope: "*",
+      defaultSpace: "labs",
+      createOptions: () => [{ prefix: "", label: "" }],
+      test: { keys: [..."qq", "\x14"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "labs", name: "qq" });
+    expect(plain(out)).toContain("📂 New labs/qq");
   });
 
   test("Ctrl-T with empty query prompts for a name", async () => {
     const { result, out } = await pick({ ...base(), scope: "tries", test: { keys: ["\x14", ...chars("my thing"), "\r"] } });
-    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${today()}-my-thing` });
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}my-thing` });
     expect(out).toContain("\x1b[2J\x1b[H"); // prompt clears the screen
-    expect(out).toContain(`\x1b[1;34mEnter new name\x1b[0m\x1b[39m\x1b[49m\n> \x1b[90m${today()}-\x1b[39m`);
+    expect(out).toContain(`\x1b[1;34mEnter new name\x1b[0m\x1b[39m\x1b[49m\n> \x1b[90mtries/${DATE}\x1b[39m`);
     expect(out).toContain("\x1b[?25h");
   });
 
@@ -119,6 +220,214 @@ describe("create", () => {
     const { result, out } = await pick({ ...base(), scope: "tries", test: { keys: ["\x14", "\r", "\x1b[B", "\r"] } });
     expect(result).toEqual({ type: "cd", path: byName("2026-09-01-vector-search").path });
     expect(frames(out).length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("no create options: no rows, Ctrl-T does nothing", async () => {
+    const { result, out } = await pick({ ...base(), scope: "tries", createOptions: () => [], test: { keys: [..."zzz", "\x14", "\r"] } });
+    expect(result).toBeNull();
+    expect(plain(out)).not.toContain("📂");
+  });
+});
+
+describe("new space from a create row", () => {
+  function newSpaceRun(keys: string[], extra: Partial<PickerOptions> = {}) {
+    const calls: Array<[string, string]> = [];
+    const run = pick({
+      ...base(),
+      scope: "*",
+      defaultSpace: "ideas",
+      createOptions: TWO_OPTIONS,
+      addSpace: (name, prefix) => {
+        calls.push([name, prefix]);
+      },
+      test: { keys },
+      ...extra,
+    });
+    return { calls, run };
+  }
+
+  test("rows are marked (new space); Enter asks for the default, then creates", async () => {
+    const { calls, run } = newSpaceRun([..."foo", "\r", "\r"]);
+    const { result, out } = await run;
+    expect(result).toEqual({ type: "mkdir", space: "ideas", name: `${DATE}foo` });
+    expect(calls).toEqual([["ideas", "auto"]]);
+    const p = plain(out);
+    expect(p).toMatch(/→ 📂 New ideas\/\d{4}-\d{2}-\d{2}-foo +\(new space\)\n/);
+    expect(p).toMatch(/ {2}📂 New ideas\/foo +\(new space\) {2}no date\n/);
+    expect(p).toContain(`New space "ideas" — default for new entries:\n→ date      (${DATE}name)\n  no date   (name)\n↑↓ Enter  Esc Back\n`);
+  });
+
+  test("preselects no date for a row without prefix; the choice can be changed", async () => {
+    const { calls, run } = newSpaceRun([..."foo", "\x1b[B", "\r", "\x1b[A", "\r"]);
+    const { result, out } = await run;
+    expect(plain(out)).toContain("  date      (");
+    expect(plain(out)).toContain("→ no date   (name)");
+    expect(calls).toEqual([["ideas", "auto"]]);
+    // the entry keeps the prefix of the row that was picked
+    expect(result).toEqual({ type: "mkdir", space: "ideas", name: "foo" });
+  });
+
+  test("no date variant", async () => {
+    const { calls, run } = newSpaceRun([..."foo", "\r", "\x1b[B", "\r"]);
+    expect((await run).result).toEqual({ type: "mkdir", space: "ideas", name: `${DATE}foo` });
+    expect(calls).toEqual([["ideas", ""]]);
+  });
+
+  test("Esc on the choice screen goes back to the list", async () => {
+    const { calls, run } = newSpaceRun([..."foo", "\x14", "\x1b", "\x1b[B", "\r"]);
+    const { result } = await run;
+    expect(calls).toEqual([]);
+    // back in the list (cursor kept), the choice screen came up again for the second row
+    expect(result).toBeNull();
+  });
+
+  test("addSpace throwing shows the message and stays in the picker", async () => {
+    const { run } = newSpaceRun([..."foo", "\r", "\r", "\x1b[B"], {
+      addSpace: () => {
+        throw new Error('space "ideas" is not allowed');
+      },
+    });
+    const { result, out } = await run;
+    expect(result).toBeNull();
+    const f = frames(out);
+    expect(f.at(-2)).toContain('Error: space "ideas" is not allowed');
+    expect(f.at(-1)).toContain("↑↓ Enter  ^T New");
+  });
+
+  test("Ctrl-T prompt into a new space", async () => {
+    const { calls, run } = newSpaceRun(["\x14", ..."bar", "\r", "\r"]);
+    expect((await run).result).toEqual({ type: "mkdir", space: "ideas", name: `${DATE}bar` });
+    expect(calls).toEqual([["ideas", "auto"]]);
+  });
+});
+
+describe("space/rest queries", () => {
+  test("`labs/` lists that space (with prefix) from another scope", async () => {
+    const { out } = await pick({ ...base(), scope: "tries", query: "labs/", test: { renderOnce: true } });
+    const p = plain(out);
+    expect(p).toContain("📁 labs/IMG-1234-autofit");
+    expect(p).toContain("📁 labs/IMG-99-labs-thing");
+    expect(p).not.toContain("redis");
+    expect(p).not.toContain("📂"); // no name yet
+  });
+
+  test("`labs/rest` filters by rest and creates in labs", async () => {
+    const { result, out } = await pick({
+      ...base(),
+      scope: "*",
+      createOptions: (space) => [{ prefix: space === "labs" ? "IMG-7-" : "x-", label: "" }],
+      test: { keys: [..."labs/auto", "\x1b[B", "\r"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "labs", name: "IMG-7-auto" });
+    const last = frames(out).at(-1)!;
+    expect(last).toContain("Search: labs/auto");
+    expect(last).toContain("IMG-1234-autofit");
+    expect(last).not.toContain("IMG-99-labs-thing");
+    expect(last).toContain("→ 📂 New labs/IMG-7-auto");
+    // highlighting uses the part after the slash
+    expect(out).toContain("\x1b[1;33ma\x1b[22m\x1b[39m\x1b[1;33mu\x1b[22m\x1b[39m");
+  });
+
+  test("unknown space: no rows, create rows marked (new space)", async () => {
+    const calls: string[] = [];
+    const { result, out } = await pick({
+      ...base(),
+      scope: "tries",
+      addSpace: (name) => {
+        calls.push(name);
+      },
+      test: { keys: [..."docs/guide", "\r", "\r"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "docs", name: `${DATE}guide` });
+    expect(calls).toEqual(["docs"]);
+    expect(frames(out).at(-1)).toMatch(/→ 📂 New docs\/\S+guide +\(new space\)/);
+  });
+
+  test("not a space name before the slash: plain query, no create rows", async () => {
+    const { out } = await pick({ ...base(), scope: "tries", query: "-x/y", test: { renderOnce: true } });
+    expect(plain(out)).toContain("Search: -x/y");
+    expect(plain(out)).not.toContain("📂");
+  });
+});
+
+describe("+ new tab", () => {
+  function plusNew(keys: string[], extra: Partial<PickerOptions> = {}) {
+    const calls: Array<[string, string]> = [];
+    const run = pick({
+      ...base(),
+      scope: "*",
+      addSpace: (name, prefix) => {
+        calls.push([name, prefix]);
+      },
+      test: { keys: ["\x1b[Z", ...keys] },
+      ...extra,
+    });
+    return { calls, run };
+  }
+
+  test("search label and hint", async () => {
+    const { run } = plusNew([]);
+    const f = frames((await run).out)[1]!;
+    expect(f).toContain("[+ new]");
+    expect(f).toContain("New space:  \n");
+    expect(f).toContain("\n  Type a name, Enter to create · Tab to leave\n");
+    expect(f).not.toContain("📁 tries/");
+  });
+
+  test("creates the space, switches to it and stays in the picker", async () => {
+    const { calls, run } = plusNew([..."ideas", "\r", "\r", ..."foo", "\r"]);
+    const { result, out } = await run;
+    expect(calls).toEqual([["ideas", "auto"]]);
+    expect(result).toEqual({ type: "mkdir", space: "ideas", name: `${DATE}foo` });
+    const f = frames(out);
+    const switched = f.find((x) => x.includes("[ideas]"))!;
+    expect(switched.split("\n")[0]).toBe("📁 work   all [ideas] labs  tries  + new ");
+    expect(switched).toContain("Search:  \n");
+    expect(f.at(-1)).toContain("→ 📂 New ideas/");
+    expect(f.at(-1)).not.toContain("(new space)");
+  });
+
+  test("Ctrl-T creates too; no date variant", async () => {
+    const { calls, run } = plusNew([..."zeta", "\x14", "\x1b[B", "\r"]);
+    const { out } = await run;
+    expect(calls).toEqual([["zeta", ""]]);
+    expect(activeTabs(out).at(-1)).toBe("zeta");
+    expect(frames(out).at(-1)!.split("\n")[0]).toBe("📁 work   all  labs  tries [zeta] + new ");
+  });
+
+  test("invalid and existing names show a status and stay", async () => {
+    const { calls, run } = plusNew([..."a/b", "\r", "\x7f", "\x7f", "\x7f", ..."LABS", "\r", "\x1b[D"]);
+    const { result, out } = await run;
+    expect(calls).toEqual([]);
+    expect(result).toBeNull();
+    const p = plain(out);
+    expect(p).toContain("Invalid space name: a/b");
+    expect(p).toContain("Space LABS already exists");
+    expect(activeTabs(out).at(-1)).toBe("+ new");
+  });
+
+  test("addSpace throwing keeps the + new tab", async () => {
+    const { run } = plusNew([..."ideas", "\r", "\r", "\x1b[D"], {
+      addSpace: () => {
+        throw new Error("no permission");
+      },
+    });
+    const { out } = await run;
+    expect(plain(out)).toContain("Error: no permission");
+    expect(activeTabs(out).at(-1)).toBe("+ new");
+  });
+
+  test("Esc cancels the picker", async () => {
+    const { run } = plusNew(["\x1b"]);
+    expect((await run).result).toBeNull();
+  });
+
+  test("Esc on the choice screen returns to the tab", async () => {
+    const { calls, run } = plusNew([..."ideas", "\r", "\x1b", "\x1b[D"]);
+    const { out } = await run;
+    expect(calls).toEqual([]);
+    expect(activeTabs(out).at(-1)).toBe("+ new");
+    expect(frames(out).at(-1)).toContain("New space: ideas");
   });
 });
 
@@ -139,7 +448,9 @@ describe("delete", () => {
     expect(seen).toEqual([paths]);
     const p = plain(out);
     expect(p).toContain("DELETE MODE  2 marked  |  Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel");
-    expect(p).toContain("Delete 2 Directories\n  📁 2026-09-18-redis-bench\n  📁 notes\n  notes: cesdk-web has uncommitted changes\nType YES to confirm deletion: ");
+    expect(p).toContain(
+      "Delete 2 Directories\n  📁 2026-09-18-redis-bench\n  📁 notes\n  notes: cesdk-web has uncommitted changes\nType YES to confirm deletion: ",
+    );
     expect(p).toContain("🗑️  ");
   });
 
@@ -152,8 +463,6 @@ describe("delete", () => {
   test("wrong confirmation cancels and clears marks", async () => {
     const { result, out } = await pick({ ...base(), scope: "tries", test: { keys: parseTestKeys("CTRL-D,ENTER,Y,E,S,S,ENTER") } });
     expect(result).toBeNull();
-    const p = plain(out);
-    expect(p).toContain("Delete cancelled");
     // the frame after the cancel shows the status once and is no longer in delete mode
     expect(frames(out).at(-1)).toContain("Delete cancelled");
     expect(frames(out).at(-1)).not.toContain("🗑️");
@@ -172,8 +481,7 @@ describe("delete", () => {
         test: { keys: parseTestKeys("CTRL-D,ENTER,Y,E,S,ENTER") },
       });
       expect(result).toBeNull();
-      const p = plain(out);
-      expect(p).toContain(`Error: Safety check failed: ${outside} is not inside ${root}`);
+      expect(plain(out)).toContain(`Error: Safety check failed: ${outside} is not inside ${root}`);
       // marks survive a failed check (as in try)
       const errorFrame = frames(out).find((f) => f.includes("Error: Safety check failed"));
       expect(errorFrame).toContain("🗑️");
@@ -218,48 +526,6 @@ describe("cancel", () => {
   });
 });
 
-describe("scopes", () => {
-  test("Tab / Shift-Tab cycle scopes and reset the cursor", async () => {
-    const { result, out } = await pick({
-      ...base(),
-      scope: "*",
-      test: { keys: parseTestKeys("DOWN,TAB,TAB,TAB,SHIFT-TAB,SHIFT-TAB,DOWN,TAB,ENTER") },
-    });
-    const headers = plain(out).match(/📁 Work Selector · \S+/g)!;
-    expect(headers.map((h) => h.split(" · ")[1])).toEqual([
-      "all",
-      "all",
-      "labs",
-      "tries",
-      "all",
-      "tries",
-      "labs",
-      "labs",
-      "tries",
-    ]);
-    // Tab after DOWN resets the cursor to the top row of the new scope
-    expect(result).toEqual({ type: "cd", path: byName("2026-09-18-redis-bench").path });
-  });
-
-  test("all scope shows a dim space/ prefix; matching uses the basename only", async () => {
-    const { out } = await pick({ ...base(), scope: "*", test: { renderOnce: true } });
-    expect(out).toContain("\x1b[90mlabs/\x1b[39m");
-    expect(out).toContain("\x1b[90mtries/\x1b[39m\x1b[90m2026-09-18\x1b[39m");
-    expect(plain(out)).toContain("📁 labs/IMG-1234-autofit");
-
-    const q = await pick({ ...base(), scope: "*", query: "labs", test: { renderOnce: true } });
-    const p = plain(q.out);
-    expect(p).toContain("IMG-99-labs-thing");
-    expect(p).not.toContain("IMG-1234-autofit");
-  });
-
-  test("single scope shows no prefix", async () => {
-    const { out } = await pick({ ...base(), scope: "labs", test: { renderOnce: true } });
-    expect(plain(out)).toContain("📁 IMG-1234-autofit");
-    expect(plain(out)).not.toContain("tries");
-  });
-});
-
 describe("move", () => {
   test("Ctrl-R prompts and returns the typed target", async () => {
     const { result, out } = await pick({
@@ -268,8 +534,7 @@ describe("move", () => {
       test: { keys: ["\x1b[B", "\x12", ...chars("labs/vector"), "\r"] },
     });
     expect(result).toEqual({ type: "move", from: byName("2026-09-01-vector-search").path, to: "labs/vector" });
-    const p = plain(out);
-    expect(p).toContain("Move to (space/name):\ncurrent: tries/2026-09-01-vector-search\n> ");
+    expect(plain(out)).toContain("Move to (space/name):\ncurrent: tries/2026-09-01-vector-search\n> ");
   });
 
   test("empty input returns to the list", async () => {
@@ -277,9 +542,9 @@ describe("move", () => {
     expect(result).toEqual({ type: "cd", path: byName("2026-09-18-redis-bench").path });
   });
 
-  test("Ctrl-R on the Create new row does nothing", async () => {
+  test("Ctrl-R on a create row does nothing", async () => {
     const { result } = await pick({ ...base(), scope: "tries", test: { keys: [...chars("zzz"), "\x12", "\r"] } });
-    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${today()}-zzz` });
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}zzz` });
   });
 });
 
@@ -334,39 +599,25 @@ describe("output modes", () => {
     const { result, out } = await pick({ ...base(), scope: "tries", test: { renderOnce: true } });
     expect(result).toBeNull();
     expect(frames(out)).toHaveLength(1);
-    expect(out.startsWith("\x1b[1;38;5;208m📁 Work Selector · tries\x1b[0m")).toBe(true);
-  });
-
-  test("footer shows Tab/Ctrl-R hints only when they fit", async () => {
-    const narrow = await pick({ ...base(), scope: "tries", test: { renderOnce: true } });
-    expect(plain(narrow.out)).toContain("Ctrl-D: Delete  Esc: Cancel");
-    process.env.WORK_WIDTH = "100";
-    try {
-      const wide = await pick({ ...base(), scope: "tries", test: { renderOnce: true } });
-      expect(plain(wide.out)).toContain(
-        "↑↓: Navigate  Enter: Select  Ctrl-T: New  Ctrl-D: Delete  Tab: Scope  Ctrl-R: Move  Esc: Cancel",
-      );
-    } finally {
-      process.env.WORK_WIDTH = "80";
-    }
+    expect(out.startsWith("\x1b[1;38;5;208m📁 work\x1b[0m")).toBe(true);
   });
 
   test("non-TTY without keys errors", async () => {
     const { result, out } = await pick({ ...base(), scope: "tries" });
     expect(result).toBeNull();
     expect(out).toContain("Error: work requires an interactive terminal\n");
-    expect(out).not.toContain("Work Selector");
+    expect(out).not.toContain("📁 work");
   });
 
   test("colors: false leaves tokens unexpanded", async () => {
     const { out } = await pick({ ...base(), scope: "tries", colors: false, test: { renderOnce: true } });
-    expect(out).toContain("{h1}📁 Work Selector · tries{reset}\n");
+    expect(out).toContain("{h1}📁 work{reset}  {dim} all {/fg}");
   });
 
   test("plain text when not a TTY and colors are not forced", async () => {
     const { out } = await pick({ ...base(), scope: "tries", test: { renderOnce: true, forceColors: false } });
     expect(out).not.toContain("{");
-    expect(out.split("\n")[0]).toBe("📁 Work Selector · tries");
+    expect(out.split("\n")[2]).toBe("Search: \x1b[7m \x1b[27m");
   });
 });
 
@@ -397,19 +648,25 @@ function ttyErr() {
 
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
+function ttyOptions(stdin: PassThrough, stderr: NodeJS.WriteStream, extra: Partial<PickerOptions> = {}): PickerOptions {
+  return {
+    ...base(),
+    scope: "tries",
+    defaultSpace: "tries",
+    createOptions: () => [{ prefix: "", label: "" }],
+    addSpace: () => {},
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    stderr,
+    ...extra,
+  };
+}
+
 describe("terminal", () => {
   test("raw mode, multi-key chunks, restore on exit", async () => {
     const { stdin, raw } = fakeStdin();
     const err = ttyErr();
     const winch = process.listenerCount("SIGWINCH");
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: err.stream,
-    });
+    const p = runPicker(ttyOptions(stdin, err.stream));
     await tick();
     expect(process.listenerCount("SIGWINCH")).toBe(winch + 1);
     stdin.write("\x1b[B\x1b[B");
@@ -425,14 +682,7 @@ describe("terminal", () => {
 
   test("lone Esc cancels", async () => {
     const { stdin } = fakeStdin();
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: ttyErr().stream,
-    });
+    const p = runPicker(ttyOptions(stdin, ttyErr().stream));
     await tick();
     stdin.write("\x1b");
     expect(await p).toBeNull();
@@ -440,14 +690,7 @@ describe("terminal", () => {
 
   test("cooked-mode prompt for Ctrl-T", async () => {
     const { stdin, raw } = fakeStdin();
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "p-",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: ttyErr().stream,
-    });
+    const p = runPicker(ttyOptions(stdin, ttyErr().stream, { createOptions: () => [{ prefix: "p-", label: "" }] }));
     await tick();
     stdin.write("\x14");
     await tick();
@@ -457,16 +700,29 @@ describe("terminal", () => {
     expect(raw).toEqual([true, false, true, false]);
   });
 
+  test("choice screen with arrow keys", async () => {
+    const { stdin } = fakeStdin();
+    const calls: string[] = [];
+    const p = runPicker(
+      ttyOptions(stdin, ttyErr().stream, {
+        scope: "*",
+        defaultSpace: "ideas",
+        addSpace: (name, prefix) => {
+          calls.push(`${name}:${prefix}`);
+        },
+      }),
+    );
+    await tick();
+    stdin.write("x\r");
+    await tick();
+    stdin.write("\x1b[B\r");
+    expect(await p).toEqual({ type: "mkdir", space: "ideas", name: "x" });
+    expect(calls).toEqual(["ideas:"]);
+  });
+
   test("cooked-mode YES confirmation", async () => {
     const { stdin } = fakeStdin();
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: ttyErr().stream,
-    });
+    const p = runPicker(ttyOptions(stdin, ttyErr().stream));
     await tick();
     stdin.write("\x04\r");
     await tick();
@@ -477,20 +733,13 @@ describe("terminal", () => {
   test("SIGWINCH clears and redraws", async () => {
     const { stdin } = fakeStdin();
     const err = ttyErr();
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: err.stream,
-    });
+    const p = runPicker(ttyOptions(stdin, err.stream));
     await tick();
     const before = err.text().split("\x1b[2J").length;
     process.kill(process.pid, "SIGWINCH");
     await tick(100);
     expect(err.text().split("\x1b[2J").length).toBe(before + 1);
-    expect(err.text().split("Work Selector").length).toBe(3);
+    expect(err.text().split("📁 work").length).toBe(3);
     stdin.write("\x03");
     expect(await p).toBeNull();
   });
@@ -499,16 +748,13 @@ describe("terminal", () => {
     const { stdin, raw } = fakeStdin();
     const err = ttyErr();
     const winch = process.listenerCount("SIGWINCH");
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => {
-        throw new Error("boom");
-      },
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: err.stream,
-    });
+    const p = runPicker(
+      ttyOptions(stdin, err.stream, {
+        createOptions: () => {
+          throw new Error("boom");
+        },
+      }),
+    );
     await tick();
     stdin.write("a");
     await expect(p).rejects.toThrow("boom");
@@ -519,14 +765,7 @@ describe("terminal", () => {
 
   test("stdin EOF cancels", async () => {
     const { stdin } = fakeStdin();
-    const p = runPicker({
-      ...base(),
-      scope: "tries",
-      prefixFor: () => "",
-      createSpace: () => "tries",
-      stdin: stdin as unknown as NodeJS.ReadStream,
-      stderr: ttyErr().stream,
-    });
+    const p = runPicker(ttyOptions(stdin, ttyErr().stream));
     await tick();
     stdin.end();
     expect(await p).toBeNull();

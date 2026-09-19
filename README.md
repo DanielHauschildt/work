@@ -53,8 +53,30 @@ work rm ./ui --yes            # remove a lane (refuses dirty/unpushed work witho
 work info --json | work ls --json | work path <query> [lane]
 ```
 
-Picker keys: ↑↓ Ctrl-P/N, Enter, Ctrl-T new, Ctrl-D mark + Enter + `YES` delete, Ctrl-R move to
-`space/name`, Tab/Shift-Tab scope, Ctrl-A/E/B/F/K/W/H editing, Esc.
+### Picker
+
+```text
+📁 work   all  [tries]  labs  clients  + new
+──────────────────────────────────────────────────────────
+Search: autofit▌
+──────────────────────────────────────────────────────────
+→ 📁 2026-09-12-autofit-spike                3d ago, 4.1
+
+  📂 New tries/2026-09-19-autofit
+  📂 New tries/autofit                           no date
+──────────────────────────────────────────────────────────
+↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc
+```
+
+- **Tab / Shift-Tab** switch between all spaces, each space, and `+ new` (type a name, Enter → new space).
+- Two create rows: the space's default prefix first (Ctrl-T takes it), the other variant (date ↔ no date) below.
+- Type `space/name` to filter or create in another space; an unknown space is created — you're asked once
+  whether its entries get a date prefix (stored in `<space>/.space.toml`).
+- try's keys: ↑↓ Ctrl-P/N, Enter, Ctrl-T new, Ctrl-D mark + Enter + `YES` delete, Ctrl-A/E/B/F/K/W/H editing, Esc;
+  plus Ctrl-R move to `space/name`.
+
+Spaces from the command line: `work space` (list), `work space new clients --prefix none`,
+`work space set labs --prefix IMG`.
 
 ## Space config — `<space>/.space.toml`
 

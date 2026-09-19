@@ -66,8 +66,9 @@ export async function pick(opts: Partial<PickerOptions> & Pick<PickerOptions, "i
   const result = await runPicker({
     scopes: ["*", ...new Set(opts.items.map((i) => i.space))].sort(),
     scope: "*",
-    prefixFor: () => `${today()}-`,
-    createSpace: (scope) => (scope === "*" ? "tries" : scope),
+    defaultSpace: "tries",
+    createOptions: () => [{ prefix: `${today()}-`, label: "" }],
+    addSpace: () => {},
     stderr: err.stream,
     ...opts,
   });

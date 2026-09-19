@@ -163,17 +163,22 @@ d("picker parity (try vs work)", () => {
 });
 
 d("render parity", () => {
-  test("--and-exit screen matches try except title and footer additions", () => {
+  test("--and-exit list area matches try (header/footer differ on purpose)", () => {
     seed(ENTRIES);
     const t = runTry(["exec", "--and-exit"]);
     const w = runWork(["exec", "--and-exit"]);
-    const norm = (s: string) =>
-      s
-        .replace(/📁 (Try|Work) Selector( · \w+)?/, "📁 SELECTOR")
-        .replace(/  Tab: Scope  Ctrl-R: Move/, "")
+    /** Rows between the separator under the search line and the footer separator. */
+    const listArea = (s: string) => {
+      const lines = s.split("\n");
+      const seps = lines.flatMap((l, i) => (l.includes("────") ? [i] : []));
+      return lines
+        .slice(seps[1]! + 1, seps[seps.length - 1])
+        .join("\n")
         // scores drift by milliseconds between the two runs
         .replace(/(\d+[mhdw] ago|just now), \d+\.\d/g, "$1, S");
-    expect(norm(w.stderr)).toBe(norm(t.stderr));
+    };
+    expect(listArea(w.stderr)).toBe(listArea(t.stderr));
+    expect(listArea(t.stderr).split("\n").length).toBeGreaterThan(5);
     expect(w.code).toBe(t.code);
   });
 
@@ -181,8 +186,18 @@ d("render parity", () => {
     seed(ENTRIES);
     const t = runTry(["exec", "--and-type", "redis", "--and-exit"]);
     const w = runWork(["exec", "--and-type", "redis", "--and-exit"]);
-    const strip = (s: string) => s.split("\n").filter((l) => /redis|Search/.test(l)).map((l) => l.replace(/, \d+\.\d/, "")).join("\n");
+    // create rows differ on purpose: try "Create new: X", work "New tries/X" plus a second "no date" variant row
+    const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+    const createRow = (l: string) => l.replace(/📂 (?:Create new: |New tries\/)(\S+)\s*$/, "📂 CREATE $1");
+    const strip = (s: string) =>
+      plain(s)
+        .split("\n")
+        .filter((l) => /redis|Search/.test(l) && !/no date\s*$/.test(l))
+        .map((l) => createRow(l.replace(/, \d+\.\d/, "")))
+        .join("\n");
     expect(strip(w.stderr)).toBe(strip(t.stderr));
+    expect(strip(t.stderr)).toContain("📂 CREATE ");
+    expect(plain(w.stderr)).toMatch(/📂 New tries\/redis\s+no date/);
   });
 });
 

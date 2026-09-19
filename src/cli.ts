@@ -29,10 +29,10 @@ import {
   removeTree,
 } from "./lanes.ts";
 import { hasModel, loadModel, repoBranch, topoLanes } from "./model.ts";
-import { cloneDirName, dashify, isGitUri, versionedBase } from "./naming.ts";
+import { cloneDirName, dashify, isGitUri, today, versionedBase } from "./naming.ts";
 import { expandHome, isInside, type EntryInfo, Root } from "./root.ts";
 import { parentRefOf, submit, sync } from "./stack.ts";
-import { formatRelativeTime, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
+import { type CreateOption, formatRelativeTime, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
 
 export const VERSION = "0.1.0";
 const DEFAULT_SPACE = "tries";
@@ -80,6 +80,7 @@ Usage:
   work clone <url> [name] | <url>  New entry with a checkout of <url>
   work path <query> [lane]         Print the path of an entry (or lane)
   work ls [--space S] [--json] [--stale] [--archived]
+  work space [ls | new <name> [--prefix P] | set <name> --prefix P]
   work info [entry] [--json]       Lanes, branches, parents, status, PRs
   work add <repo|url|path> [branch] [--lane L]
   work lane <name> [repos…] [--on <lane>|trunk]
@@ -98,7 +99,8 @@ Options:
   --no-colors, --no-expand-tokens, NO_COLOR
 
 Picker keys: ↑↓/Ctrl-P/N navigate, Enter select/create, Ctrl-T new, Ctrl-D delete, Ctrl-R move,
-             Tab scope, Ctrl-A/E/B/F/K/W edit, Esc cancel
+             Tab/Shift-Tab switch space (last tab: + new space), Ctrl-A/E/B/F/K/W edit, Esc cancel
+             Type space/name to filter or create in another (or a new) space.
 `;
 }
 
@@ -162,7 +164,10 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
   ctx.root.ensure();
   if (ctx.space) ctx.root.spacePath(ctx.space);
   const spaces = ctx.root.spaces();
-  const scopes = ["*", ...new Set([...spaces, ...(ctx.space ? [ctx.space] : [])])];
+  // scopes are existing spaces only; a shortcut whose space doesn't exist yet starts in "all" and creates there
+  // (the picker then asks for the new space's default prefix)
+  const scopes = ["*", ...spaces];
+  const startScope = ctx.space && spaces.includes(ctx.space) ? ctx.space : "*";
   const visits = ctx.history.lastVisits();
   const now = new Date();
   const items: PickerItem[] = ctx.root.allEntries().map((e) => {
@@ -182,11 +187,14 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
   const result = await runPicker({
     items,
     scopes,
-    scope: ctx.space ?? "*",
+    scope: startScope,
     query,
     initialInput: ctx.test.type,
-    prefixFor: (s) => spacePrefix(ctx.root, s, ctx.prefix),
-    createSpace: (scope) => (scope === "*" ? defaultSpace : scope),
+    defaultSpace,
+    createOptions: (s) => createOptions(ctx, s),
+    addSpace: (name, prefix) => {
+      ctx.root.addSpace(name, prefix);
+    },
     deleteWarnings: (paths) => paths.flatMap((p) => removalWarnings(p)),
     rootPath: ctx.root.path,
     test: {
@@ -228,6 +236,50 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       ctx.emit.cd(moved.cd ?? moved.path);
       return 0;
     }
+  }
+}
+
+/** Create rows for a space: its default prefix first, then the other variant (date ↔ no date). */
+function createOptions(ctx: Ctx, space: string): CreateOption[] {
+  const first = spacePrefix(ctx.root, space, ctx.prefix);
+  const dated = `${today()}-`;
+  return first === "" ? [{ prefix: "", label: "" }, { prefix: dated, label: "date" }] : [{ prefix: first, label: "" }, { prefix: "", label: "no date" }];
+}
+
+/** Normalize a --prefix value for .space.toml: none → "". */
+function prefixSetting(p: string): string {
+  return p === "none" ? "" : p;
+}
+
+function cmdSpace(ctx: Ctx, args: string[]): number {
+  const [sub = "ls", name] = args;
+  switch (sub) {
+    case "ls": {
+      const rows = ctx.root.spaces().map((space) => {
+        const cfg = ctx.root.spaceConfig(space);
+        return { space, prefix: cfg.prefix ?? "auto", entries: ctx.root.entries(space).length, path: ctx.root.spacePath(space) };
+      });
+      if (ctx.json) out(JSON.stringify(rows, null, 2));
+      else for (const r of rows) out(`${r.space.padEnd(16)} prefix ${(r.prefix === "" ? "none" : r.prefix).padEnd(10)} ${r.entries} entries`);
+      return 0;
+    }
+    case "new": {
+      if (!name) fail("usage: work space new <name> [--prefix auto|none|TEXT]");
+      const dir = ctx.root.addSpace(name, ctx.prefix === undefined ? undefined : prefixSetting(ctx.prefix));
+      if (ctx.json) out(JSON.stringify({ space: name, path: dir }));
+      else info(`Created space ${name}`);
+      ctx.emit.cd(dir);
+      return 0;
+    }
+    case "set": {
+      if (!name || ctx.prefix === undefined) fail("usage: work space set <name> --prefix auto|none|TEXT");
+      if (!ctx.root.spaces().includes(name)) fail(`no such space: ${name}`);
+      ctx.root.writeSpaceConfig(name, { prefix: prefixSetting(ctx.prefix) });
+      info(`${name}: prefix ${ctx.prefix}`);
+      return 0;
+    }
+    default:
+      fail("usage: work space [ls | new <name> [--prefix P] | set <name> --prefix P]");
   }
 }
 
@@ -625,6 +677,9 @@ export async function main(argv: string[]): Promise<number> {
       break;
     case "init":
       return cmdInit(ctx, args, pathFlag);
+    case "space":
+      code = cmdSpace(ctx, args);
+      break;
     case "new":
       code = cmdNew(ctx, args);
       break;

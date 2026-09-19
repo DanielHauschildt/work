@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fail } from "./errors.ts";
+
+export const SPACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export interface SpaceConfig {
   prefix?: string;
@@ -95,6 +97,30 @@ export class Root {
     }
     this.configs.set(space, config);
     return config;
+  }
+
+  /** Merge `patch` into `<space>/.space.toml` (flat keys only), creating the space if needed. */
+  writeSpaceConfig(space: string, patch: SpaceConfig): void {
+    const dir = this.spacePath(space);
+    if (!SPACE_NAME.test(space)) fail(`invalid space name: ${space}`);
+    mkdirSync(dir, { recursive: true });
+    this.configs.delete(space);
+    const merged: Record<string, unknown> = { ...this.spaceConfig(space), ...patch };
+    const lines = Object.entries(merged)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${k} = ${typeof v === "number" || typeof v === "boolean" ? String(v) : JSON.stringify(String(v))}`);
+    writeFileSync(join(dir, ".space.toml"), `${lines.join("\n")}\n`);
+    this.configs.delete(space);
+  }
+
+  /** Create a space folder (optionally with a default prefix). */
+  addSpace(space: string, prefix?: string): string {
+    if (!SPACE_NAME.test(space)) fail(`invalid space name: ${space}`);
+    const dir = this.spacePath(space);
+    if (existsSync(dir)) fail(`space ${space} already exists`);
+    mkdirSync(dir, { recursive: true });
+    if (prefix !== undefined) this.writeSpaceConfig(space, { prefix });
+    return dir;
   }
 
   entries(space: string): EntryInfo[] {

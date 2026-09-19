@@ -77,6 +77,7 @@ work worktree <dir|path> [name]  try-compat form of the above
 work clone <url> [name] | <url>  new entry `<prefix>-<owner>-<repo>`; store + checkout in lane root
 work path <query> [lane]         print absolute path of the unique best match (exit 1 if none/ambiguous)
 work ls [--space S] [--json] [--stale]
+work space [ls | new <name> [--prefix P] | set <name> --prefix P]
 work info [entry] [--json]       lanes, repos, branches, dirty/unpushed, parents, PRs
 work add <repo|url|path> [branch] [--lane L]   add checkout to lane (default: current lane, else root)
 work lane <name> [repos...] [--on PARENT]      create lane (phase 2)
@@ -102,7 +103,11 @@ proximity, density, length penalty, recency bonus), "Create new" row, keys ↑/�
 Ctrl-A/E/B/F/K/W, Ctrl-T create, Ctrl-D mark + Enter → type `YES`, Esc/Ctrl-C, SIGWINCH redraw, scroll indicator,
 relative time + score column, `📁`/`🗑️` icons, date part dimmed.
 
-Extensions: Tab / Shift-Tab cycle scope (all → each space); rows show `space/` prefix in all-scope; badges
+Extensions: header is a space bar (`all  tries  labs  + new`, active one highlighted); Tab / Shift-Tab cycle
+all → each space → `+ new` (name → choose date/no-date default → space created, picker switches to it); compact
+footer that fits 80 columns. Two create rows per target space: the space's default prefix first (Ctrl-T), the other
+variant (date ↔ no date) second. Query `space/rest` filters that space and creates there; an unknown space is
+created after asking its default prefix (written to `.space.toml`). Rows show `space/` prefix in all-scope; badges
 (lane count, repo names, `*` dirty — dirty computed asynchronously and redrawn, `stale` when older than the space's
 `cleanup_days`); Ctrl-R rename/move (prompt `space/name`). Recency = last visit from history, else mtime.
 

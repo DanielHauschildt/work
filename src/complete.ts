@@ -26,6 +26,7 @@ export const SUBCOMMANDS: Record<string, string> = {
   worktree: "new entry with a worktree of a repo",
   back: "go to the previous entry",
   init: "print shell integration",
+  space: "list, create or configure spaces",
 };
 
 const FLAGS: Record<string, string> = {
@@ -143,6 +144,10 @@ export function complete(root: Root, opts: { cmd: string; space?: string; words:
     case "path":
     case "info":
       return argIndex === 0 ? filter(entryCandidates(root, space), cur) : sub === "path" ? filter(laneCandidates(root, opts.cwd), cur) : [];
+    case "space":
+      if (argIndex === 0) return filter([{ value: "ls" }, { value: "new" }, { value: "set" }], cur);
+      if (argIndex === 1 && positional[1] === "set") return filter(root.spaces().map((s) => ({ value: s })), cur);
+      return [];
     case "unarchive":
       return filter(root.archived().map((e) => ({ value: `${e.space}/${e.name}` })), cur);
     case "ls":

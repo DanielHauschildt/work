@@ -203,6 +203,55 @@ describe("repos", () => {
   });
 });
 
+describe("spaces", () => {
+  test("space new / set / ls", () => {
+    expect(work(["space", "new", "clients", "--prefix", "none"]).code).toBe(0);
+    expect(readFileSync(join(sb.root, "clients", ".space.toml"), "utf8")).toBe('prefix = ""\n');
+    expect(work(["space", "new", "clients"]).stderr).toContain("already exists");
+    expect(work(["space", "new", ".hidden"]).code).toBe(1);
+    work(["space", "new", "labs"]);
+    expect(existsSync(join(sb.root, "labs", ".space.toml"))).toBe(false);
+    writeFileSync(join(sb.root, "labs", ".space.toml"), 'template = "tpl"\n');
+    expect(work(["space", "set", "labs", "--prefix", "IMG"]).code).toBe(0);
+    expect(readFileSync(join(sb.root, "labs", ".space.toml"), "utf8")).toBe('template = "tpl"\nprefix = "IMG"\n');
+    const list = JSON.parse(work(["space", "--json"]).stdout) as { space: string; prefix: string }[];
+    expect(list.map((r) => [r.space, r.prefix])).toEqual([
+      ["clients", ""],
+      ["labs", "IMG"],
+    ]);
+    expect(work(["space", "set", "nope", "--prefix", "x"]).code).toBe(1);
+    expect(work(["new", "--space", "clients", "acme"]).stdout.trim()).toBe(join(sb.root, "clients", "acme"));
+  });
+
+  test("picker: second create row makes an undated entry", () => {
+    mkdirSync(join(sb.root, "tries"), { recursive: true });
+    const r = work(["exec", "--space", "tries", "--and-keys", "TYPE=idea,DOWN,ENTER"]);
+    expect(r.code).toBe(0);
+    expect(existsSync(join(sb.root, "tries", "IDEA"))).toBe(true); // try's TYPE= token upper-cases
+    const r2 = work(["exec", "--space", "tries", "--and-keys", "TYPE=other,CTRL-T"]);
+    expect(r2.code).toBe(0);
+    expect(existsSync(join(sb.root, "tries", `${TODAY}-OTHER`))).toBe(true);
+  });
+
+  test("picker: space/name creates in a new space and asks its default prefix", () => {
+    mkdirSync(join(sb.root, "tries"), { recursive: true });
+    // first create row (dated), then choose "no date" as the space default
+    const r = work(["exec", "--and-keys", "TYPE=clients/acme,ENTER,DOWN,ENTER"]);
+    expect(r.code).toBe(0);
+    expect(existsSync(join(sb.root, "CLIENTS", `${TODAY}-ACME`))).toBe(true);
+    expect(readFileSync(join(sb.root, "CLIENTS", ".space.toml"), "utf8")).toBe('prefix = ""\n');
+  });
+
+  test("picker: + new tab creates a space and stays open in it", () => {
+    mkdirSync(join(sb.root, "tries"), { recursive: true });
+    // scopes: all, tries, + new → two Tabs; name; Enter; keep "date"; then create an entry there
+    const r = work(["exec", "--and-keys", "TAB,TAB,TYPE=labs,ENTER,ENTER,TYPE=x,CTRL-T"]);
+    expect(r.code).toBe(0);
+    expect(readFileSync(join(sb.root, "LABS", ".space.toml"), "utf8")).toBe('prefix = "auto"\n');
+    expect(existsSync(join(sb.root, "LABS", `${TODAY}-X`))).toBe(true);
+  });
+});
+
 describe("shell integration", () => {
   for (const shell of ["zsh", "bash"]) {
     test(`${shell}: shortcut creates and cds, back returns, completion answers`, () => {

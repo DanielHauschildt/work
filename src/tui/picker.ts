@@ -1,4 +1,4 @@
-// Interactive picker: port of try's TrySelector with scopes (spaces), badges and move.
+// Interactive picker: port of try's TrySelector with a space bar (scopes), create rows per prefix, badges and move.
 
 import { realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
@@ -23,20 +23,29 @@ export interface PickerItem {
   dirty?: () => Promise<boolean>;
 }
 
+export interface CreateOption {
+  /** literal text before the name: "2026-09-19-", "IMG-1-", "" */
+  prefix: string;
+  /** dim hint: "", "no date", "date" */
+  label: string;
+}
+
 export interface PickerOptions {
   /** all items across spaces; the picker filters by scope */
   items: PickerItem[];
-  /** e.g. ["*", "labs", "tries"]; "*" means all spaces */
+  /** ["*", ...existing spaces sorted]; "*" means all spaces */
   scopes: string[];
   scope: string;
   /** initial search term (whitespace -> "-") */
   query?: string;
   /** try's --and-type */
   initialInput?: string;
-  /** text before the name in "Create new", e.g. "2026-09-19-", "IMG-1234-" or "" */
-  prefixFor: (space: string) => string;
-  /** space that "Create new" creates in for a scope */
-  createSpace: (scope: string) => string;
+  /** where creation goes in scope "*" */
+  defaultSpace: string;
+  /** create rows for a space (also for spaces that don't exist yet); first = default (Ctrl-T) */
+  createOptions: (space: string) => CreateOption[];
+  /** create a space; may throw (message is shown, picker stays open) */
+  addSpace: (name: string, prefix: "auto" | "") => void;
   /** extra warning lines on the YES confirmation screen */
   deleteWarnings?: (paths: string[]) => string[];
   /** delete safety: every realpath must be inside rootPath */
@@ -61,12 +70,34 @@ interface Row {
   score: number;
 }
 
+interface CreateRow {
+  space: string;
+  option: CreateOption;
+  isNewSpace: boolean;
+}
+
+/** What the list shows for the current scope and query. */
+interface View {
+  rows: Row[];
+  creates: CreateRow[];
+  /** space new entries go to */
+  target: string;
+  /** query without a leading `space/` */
+  rest: string;
+  /** rows show a dim `space/` before the name */
+  showSpace: boolean;
+}
+
+/** Pseudo scope for the "+ new" tab. Contains a space, so it can never be a space name. */
+const NEW_TAB = "+ new";
+const SPACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const DATE_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
-const PRINTABLE = /^[a-zA-Z0-9\-_. ]$/;
+const PRINTABLE = /^[a-zA-Z0-9\-_. /]$/;
 const ALNUM = /[a-zA-Z0-9]/;
 const EXIT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
-const TRY_HELP = "↑↓: Navigate  Enter: Select  Ctrl-T: New  Ctrl-D: Delete  Esc: Cancel";
-const HELP = "↑↓: Navigate  Enter: Select  Ctrl-T: New  Ctrl-D: Delete  Tab: Scope  Ctrl-R: Move  Esc: Cancel";
+const HELP = "↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
+const HEADER = "📁 work";
+const HEADER_WIDTH = 7; // 📁 is two columns wide
 
 function len(s: string): number {
   return Array.from(s).length;
@@ -80,6 +111,15 @@ function chomp(s: string): string {
   if (s.endsWith("\r\n")) return s.slice(0, -2);
   if (s.endsWith("\n") || s.endsWith("\r")) return s.slice(0, -1);
   return s;
+}
+
+function localDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 function realpathError(e: unknown, path: string): string {
@@ -96,7 +136,8 @@ class Picker {
   private cursorPos = 0;
   private scrollOffset = 0;
   private scope: string;
-  private deleteStatus: string | null = null;
+  private scopes: string[];
+  private status: string | null = null;
   private deleteMode = false;
   private marked: string[] = [];
   private now = new Date();
@@ -114,6 +155,7 @@ class Picker {
   private needsRedraw = false;
   private needsRepaint = false;
   private readonly dirty = new Map<PickerItem, boolean>();
+  private readonly createOptionsCache = new Map<string, CreateOption[]>();
 
   constructor(private readonly opts: PickerOptions) {
     const searchTerm = dashify(opts.query ?? "");
@@ -121,6 +163,7 @@ class Picker {
     this.input = Array.from(initial);
     this.inputCursorPos = this.input.length;
     this.scope = opts.scope;
+    this.scopes = [...opts.scopes];
 
     const test = opts.test ?? {};
     this.testKeys = test.keys ? [...test.keys] : undefined;
@@ -142,7 +185,7 @@ class Picker {
     try {
       // In test mode with no keys, render once and exit without TTY requirements
       if (this.opts.test?.renderOnce && !this.testHadKeys) {
-        this.render(this.getTries());
+        this.render(this.view());
         return null;
       }
 
@@ -220,14 +263,47 @@ class Picker {
     return this.input.join("");
   }
 
-  private getTries(): Row[] {
+  private spaceExists(space: string): boolean {
+    return space !== "*" && this.scopes.includes(space);
+  }
+
+  private createOptions(space: string): CreateOption[] {
+    let options = this.createOptionsCache.get(space);
+    if (!options) {
+      options = this.opts.createOptions(space);
+      this.createOptionsCache.set(space, options);
+    }
+    return options;
+  }
+
+  private view(): View {
     this.now = this.opts.now ?? new Date();
+    if (this.scope === NEW_TAB) return { rows: [], creates: [], target: "", rest: this.query, showSpace: false };
+
+    // `space/rest` narrows the list to that space and creates there
     const query = this.query;
-    const items = this.scope === "*" ? this.opts.items : this.opts.items.filter((i) => i.space === this.scope);
-    const scored = items.map((item) => ({ item, score: calculateScore(item.basename, query, item.recency, this.now) }));
+    let listSpace: string | null = this.scope === "*" ? null : this.scope;
+    let target = this.scope === "*" ? this.opts.defaultSpace : this.scope;
+    let rest = query;
+    const slash = query.indexOf("/");
+    if (slash >= 0 && SPACE_NAME.test(query.slice(0, slash))) {
+      listSpace = query.slice(0, slash);
+      target = listSpace;
+      rest = query.slice(slash + 1);
+    }
+
+    const items = listSpace === null ? this.opts.items : this.opts.items.filter((i) => i.space === listSpace);
+    const scored = items.map((item) => ({ item, score: calculateScore(item.basename, rest, item.recency, this.now) }));
     // Filter only if searching, otherwise show all
-    const rows = query === "" ? scored : scored.filter((r) => r.score > 0);
-    return rows.sort((a, b) => b.score - a.score);
+    const rows = (rest === "" ? scored : scored.filter((r) => r.score > 0)).sort((a, b) => b.score - a.score);
+
+    const isNewSpace = !this.spaceExists(target);
+    const creates =
+      rest === "" || rest.includes("/")
+        ? []
+        : this.createOptions(target).map((option) => ({ space: target, option, isNewSpace }));
+
+    return { rows, creates, target, rest, showSpace: listSpace !== this.scope };
   }
 
   private startDirtyCheck(item: PickerItem): void {
@@ -250,14 +326,14 @@ class Picker {
 
   private async mainLoop(): Promise<PickerResult> {
     for (;;) {
-      const tries = this.getTries();
-      const showCreateNew = this.input.length > 0;
-      const totalItems = tries.length + (showCreateNew ? 1 : 0);
+      const view = this.view();
+      const tries = view.rows;
+      const totalItems = tries.length + view.creates.length;
 
       // Ensure cursor is within bounds
       this.cursorPos = Math.min(Math.max(this.cursorPos, 0), Math.max(totalItems - 1, 0));
 
-      this.render(tries);
+      this.render(view);
 
       const key = await this.readKey();
       if (key === null) continue;
@@ -265,13 +341,16 @@ class Picker {
       switch (key) {
         case "\r": {
           // Enter
-          if (this.deleteMode && this.marked.length > 0) {
-            const result = await this.confirmBatchDelete(tries);
+          if (this.scope === NEW_TAB) {
+            await this.handleNewSpace();
+          } else if (this.deleteMode && this.marked.length > 0) {
+            const result = await this.confirmBatchDelete(view);
             if (result) return result;
           } else if (this.cursorPos < tries.length) {
             return { type: "cd", path: tries[this.cursorPos]!.item.path };
-          } else if (showCreateNew) {
-            const result = await this.handleCreateNew();
+          } else if (this.cursorPos - tries.length < view.creates.length) {
+            const row = view.creates[this.cursorPos - tries.length]!;
+            const result = await this.createEntry(row.space, row.option, view.rest);
             if (result) return result;
           }
           break;
@@ -340,9 +419,13 @@ class Picker {
           break;
         }
         case "\x14": {
-          // Ctrl-T - create new (immediate)
-          const result = await this.handleCreateNew();
-          if (result) return result;
+          // Ctrl-T - create new (immediate, first create option)
+          if (this.scope === NEW_TAB) {
+            await this.handleNewSpace();
+          } else {
+            const result = await this.handleCreateNew(view);
+            if (result) return result;
+          }
           break;
         }
         case "\x12": {
@@ -380,11 +463,15 @@ class Picker {
     }
   }
 
+  /** Tabs: the given scopes, then "+ new". */
+  private get tabs(): string[] {
+    return [...this.scopes, NEW_TAB];
+  }
+
   private cycleScope(step: number): void {
-    const scopes = this.opts.scopes;
-    if (scopes.length === 0) return;
-    const idx = Math.max(scopes.indexOf(this.scope), 0);
-    this.scope = scopes[(idx + step + scopes.length) % scopes.length]!;
+    const tabs = this.tabs;
+    const idx = Math.max(tabs.indexOf(this.scope), 0);
+    this.scope = tabs[(idx + step + tabs.length) % tabs.length]!;
     this.cursorPos = 0;
   }
 
@@ -446,30 +533,31 @@ class Picker {
 
   // --- rendering --------------------------------------------------------------------------------
 
-  private render(tries: Row[]): void {
+  private render(view: View): void {
     const ui = this.ui;
     const termWidth = ui.width();
     const termHeight = ui.height();
-    const query = this.query;
+    const tries = view.rows;
+    const matchQuery = view.rest;
 
     // Use actual terminal width for separator lines
     const separator = "─".repeat(Math.max(termWidth - 1, 0));
 
-    // Header
-    ui.puts(`{h1}📁 Work Selector · ${this.scope === "*" ? "all" : this.scope}{reset}`);
+    // Header: space bar
+    ui.puts(this.spaceBar(termWidth - 1));
     ui.puts(`{dim}${separator}{/fg}`);
 
     // Search input with cursor at correct position
     const beforeCursor = this.input.slice(0, this.inputCursorPos).join("");
     const charAtCursor = this.input[this.inputCursorPos] ?? " ";
     const afterCursor = this.input.slice(this.inputCursorPos + 1).join("");
-    ui.puts(`{dim}Search:{/fg} {b}${beforeCursor}\x1b[7m${charAtCursor}\x1b[27m${afterCursor}{/b}`);
+    const label = this.scope === NEW_TAB ? "New space:" : "Search:";
+    ui.puts(`{dim}${label}{/fg} {b}${beforeCursor}\x1b[7m${charAtCursor}\x1b[27m${afterCursor}{/b}`);
     ui.puts(`{dim}${separator}{/fg}`);
 
     // Calculate visible window based on actual terminal height
     const maxVisible = Math.max(termHeight - 8, 3);
-    const showCreateNew = query !== "";
-    const totalItems = tries.length + (showCreateNew ? 1 : 0);
+    const totalItems = tries.length + view.creates.length;
 
     // Adjust scroll window
     if (this.cursorPos < this.scrollOffset) {
@@ -480,24 +568,19 @@ class Picker {
 
     const visibleEnd = Math.min(this.scrollOffset + maxVisible, totalItems);
 
+    if (this.scope === NEW_TAB) ui.puts("  {dim}Type a name, Enter to create · Tab to leave{/fg}");
+
     for (let idx = this.scrollOffset; idx < visibleEnd; idx++) {
-      // Add blank line before "Create new"
+      // Add blank line before the create rows
       if (idx === tries.length && tries.length > 0 && idx >= this.scrollOffset) ui.puts();
 
       const isSelected = idx === this.cursorPos;
       ui.print(isSelected ? "{b}→ {/b}" : "  ");
 
       if (idx < tries.length) {
-        this.renderRow(tries[idx]!, isSelected, termWidth, query);
+        this.renderRow(tries[idx]!, isSelected, termWidth, matchQuery, view.showSpace);
       } else {
-        // "Create new" option
-        if (isSelected) ui.print("{section}");
-        const prefix = this.opts.prefixFor(this.opts.createSpace(this.scope));
-        const displayText = `📂 Create new: ${prefix}${query}`;
-        ui.print(displayText);
-        // Pad to full width
-        const paddingNeeded = termWidth - 3 - len(displayText); // -3 for arrow + space
-        ui.print(" ".repeat(Math.max(paddingNeeded, 1)));
+        this.renderCreateRow(view.creates[idx - tries.length]!, isSelected, termWidth, view.rest);
       }
 
       // End selection and reset all formatting
@@ -513,26 +596,68 @@ class Picker {
     // Instructions at bottom
     ui.puts(`{dim}${separator}{/fg}`);
 
-    if (this.deleteStatus) {
-      ui.puts(`{b}${this.deleteStatus}{/b}`);
-      this.deleteStatus = null; // Clear after showing
+    if (this.status) {
+      ui.puts(`{b}${this.status}{/b}`);
+      this.status = null; // Clear after showing
     } else if (this.deleteMode) {
       const count = this.marked.length;
       ui.puts(`{strike} DELETE MODE {/strike} ${count} marked  |  Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel`);
     } else {
-      // The extra hints only when they fit: a wrapped footer would leave stale rows behind the differential redraw.
-      ui.puts(`{dim}${len(HELP) < termWidth ? HELP : TRY_HELP}{/fg}`);
+      ui.puts(`{dim}${HELP}{/fg}`);
     }
 
     ui.flush();
   }
 
-  private renderRow(row: Row, isSelected: boolean, termWidth: number, query: string): void {
+  /**
+   * `📁 work   all  [tries]  labs  + new`: tabs are ` name ` / `[name]` so labels don't shift when the active tab
+   * changes. When too wide, tabs around the active one are kept and the rest elided with `…`.
+   */
+  private spaceBar(maxWidth: number): string {
+    const labels = this.tabs.map((t) => (t === "*" ? "all" : t));
+    const widths = labels.map((l) => len(l) + 2);
+    const active = this.tabs.indexOf(this.scope);
+    const n = labels.length;
+    const fits = (lo: number, hi: number): boolean => {
+      let w = HEADER_WIDTH + 2;
+      for (let i = lo; i <= hi; i++) w += widths[i]!;
+      if (lo > 0) w += 3;
+      if (hi < n - 1) w += 3;
+      return w <= maxWidth;
+    };
+
+    let lo = 0;
+    let hi = n - 1;
+    if (!fits(lo, hi)) {
+      lo = hi = Math.max(active, 0);
+      for (let grew = true; grew; ) {
+        grew = false;
+        if (hi < n - 1 && fits(lo, hi + 1)) {
+          hi++;
+          grew = true;
+        }
+        if (lo > 0 && fits(lo - 1, hi)) {
+          lo--;
+          grew = true;
+        }
+      }
+    }
+
+    let bar = `{h1}${HEADER}{reset}  `;
+    if (lo > 0) bar += "{dim} … {/fg}";
+    for (let i = lo; i <= hi; i++) {
+      bar += i === active ? `{section}[${labels[i]}]{/section}` : `{dim} ${labels[i]} {/fg}`;
+    }
+    if (hi < n - 1) bar += "{dim} … {/fg}";
+    return bar;
+  }
+
+  private renderRow(row: Row, isSelected: boolean, termWidth: number, query: string, showSpace: boolean): void {
     const ui = this.ui;
     const { item } = row;
     this.startDirtyCheck(item);
     const isMarked = this.marked.includes(item.path);
-    const spacePrefix = this.scope === "*" ? `${item.space}/` : "";
+    const spacePrefix = showSpace ? `${item.space}/` : "";
 
     const timeText = formatRelativeTime(item.recency, this.now);
     const metaText = `${timeText}, ${formatScore(row.score)}`;
@@ -595,6 +720,27 @@ class Picker {
     if (isMarked) ui.print("{/strike}");
   }
 
+  /** `📂 New tries/2026-09-19-query` with a right-aligned dim label / `(new space)`. */
+  private renderCreateRow(row: CreateRow, isSelected: boolean, termWidth: number, rest: string): void {
+    const ui = this.ui;
+    const prefixWidth = 5; // "→ 📂 "
+    const hint = [row.isNewSpace ? "(new space)" : "", row.option.label].filter(Boolean).join("  ");
+    const metaStart = termWidth - (len(hint) + 1);
+    let text = `New ${row.space}/${row.option.prefix}${rest}`;
+
+    const maxText = hint ? metaStart - prefixWidth - 1 : termWidth - prefixWidth - 1;
+    if (len(text) > maxText && maxText > 2) text = `${take(text, maxText - 1)}…`;
+
+    ui.print("📂 ");
+    if (isSelected) ui.print("{section}");
+    ui.print(text);
+    if (isSelected) ui.print("{/section}");
+    if (hint && len(text) <= metaStart - prefixWidth - 1) {
+      ui.print(" ".repeat(metaStart - prefixWidth - len(text)));
+      ui.print(`{dim}${hint}{/fg}`);
+    }
+  }
+
   private badgeText(item: PickerItem): string {
     const parts: string[] = [];
     if (item.badges) parts.push(item.badges);
@@ -605,27 +751,114 @@ class Picker {
 
   // --- actions ----------------------------------------------------------------------------------
 
-  private async handleCreateNew(): Promise<PickerResult> {
-    const space = this.opts.createSpace(this.scope);
-    const prefix = this.opts.prefixFor(space);
-
-    // If user already typed a name, use it directly
-    if (this.input.length > 0) return { type: "mkdir", space, name: dashify(`${prefix}${this.query}`) };
+  /** Ctrl-T: first create option for the target space; prompts for a name when there is none. */
+  private async handleCreateNew(view: View): Promise<PickerResult> {
+    const space = view.target;
+    const option = this.createOptions(space)[0];
+    if (!option) return null;
+    if (view.rest !== "") {
+      if (view.rest.includes("/")) {
+        this.status = `Invalid name: ${view.rest}`;
+        return null;
+      }
+      return this.createEntry(space, option, view.rest);
+    }
 
     // No name typed, prompt for one
     this.ui.cls();
     this.ui.puts("{h2}Enter new name");
     this.ui.puts();
-    this.ui.puts(`> {dim}${prefix}{/fg}`);
+    this.ui.puts(`> {dim}${space}/${option.prefix}{/fg}`);
     this.ui.flush();
     this.stderr.write("\x1b[?25h");
 
     const entry = await this.promptLine();
-    if (entry === "") {
-      this.stderr.write("\x1b[?25l");
-      return null;
+    this.stderr.write("\x1b[?25l");
+    if (entry === "") return null;
+    return this.createEntry(space, option, entry);
+  }
+
+  /** mkdir result; a space that doesn't exist yet is created first (after asking for its default prefix). */
+  private async createEntry(space: string, option: CreateOption, rest: string): Promise<PickerResult> {
+    if (!this.spaceExists(space)) {
+      const variant = await this.chooseSpaceDefault(space, option.prefix === "" ? "" : "auto");
+      if (variant === null || !this.addSpace(space, variant)) return null;
     }
-    return { type: "mkdir", space, name: dashify(`${prefix}${entry}`) };
+    return { type: "mkdir", space, name: dashify(`${option.prefix}${rest}`) };
+  }
+
+  /** "+ new" tab: Enter / Ctrl-T creates the typed space and switches to it. */
+  private async handleNewSpace(): Promise<void> {
+    const name = this.query;
+    if (name === "") return;
+    if (!SPACE_NAME.test(name)) {
+      this.status = `Invalid space name: ${name}`;
+      return;
+    }
+    if (this.scopes.some((s) => s !== "*" && s.toLowerCase() === name.toLowerCase())) {
+      this.status = `Space ${name} already exists`;
+      return;
+    }
+    const variant = await this.chooseSpaceDefault(name, "auto");
+    if (variant === null || !this.addSpace(name, variant)) return;
+    this.scope = name;
+    this.input = [];
+    this.inputCursorPos = 0;
+    this.cursorPos = 0;
+  }
+
+  private addSpace(name: string, variant: "auto" | ""): boolean {
+    try {
+      this.opts.addSpace(name, variant);
+    } catch (e) {
+      this.status = `Error: ${errorMessage(e)}`;
+      return false;
+    }
+    const spaces = [...this.scopes.filter((s) => s !== "*"), name].sort();
+    this.scopes = this.scopes.includes("*") ? ["*", ...spaces] : spaces;
+    this.createOptionsCache.delete(name);
+    return true;
+  }
+
+  /** Choice screen for a new space's default prefix. null = back to the list. */
+  private async chooseSpaceDefault(name: string, preselect: "auto" | ""): Promise<"auto" | "" | null> {
+    const choices: Array<["auto" | "", string, string]> = [
+      ["auto", "date", `(${localDate(this.opts.now ?? new Date())}-name)`],
+      ["", "no date", "(name)"],
+    ];
+    let selected = preselect === "" ? 1 : 0;
+    const ui = this.ui;
+    ui.cls();
+    for (;;) {
+      ui.puts(`{h2}New space "${name}" — default for new entries:{reset}`);
+      ui.puts();
+      choices.forEach(([, label, example], i) => {
+        const isSelected = i === selected;
+        ui.print(isSelected ? "{b}→ {/b}" : "  ");
+        ui.print(isSelected ? `{section}${label.padEnd(7)}{/section}` : label.padEnd(7));
+        ui.puts(`   {dim}${example}{/fg}`);
+      });
+      ui.puts();
+      ui.puts("{dim}↑↓ Enter  Esc Back{/fg}");
+      ui.flush();
+
+      const key = await this.readKey();
+      switch (key) {
+        case "\x1b[A":
+        case "\x10":
+          selected = Math.max(selected - 1, 0);
+          break;
+        case "\x1b[B":
+        case "\x0e":
+          selected = Math.min(selected + 1, choices.length - 1);
+          break;
+        case "\r":
+          return choices[selected]![0];
+        case "\x1b":
+        case "\x03":
+          return null;
+      }
+    }
   }
 
   private async handleMove(item: PickerItem): Promise<PickerResult> {
@@ -645,9 +878,9 @@ class Picker {
     return { type: "move", from: item.path, to };
   }
 
-  private async confirmBatchDelete(tries: Row[]): Promise<PickerResult> {
+  private async confirmBatchDelete(view: View): Promise<PickerResult> {
     // Find marked items with their info
-    const markedItems = tries.filter((t) => this.marked.includes(t.item.path)).map((t) => t.item);
+    const markedItems = view.rows.filter((t) => this.marked.includes(t.item.path)).map((t) => t.item);
     if (markedItems.length === 0) return null;
 
     const ui = this.ui;
@@ -656,7 +889,7 @@ class Picker {
     ui.puts(`{h2}Delete ${n} Director${n === 1 ? "y" : "ies"}{reset}`);
     ui.puts();
     for (const item of markedItems) {
-      const spacePrefix = this.scope === "*" ? `{dim}${item.space}/{/fg}` : "";
+      const spacePrefix = view.showSpace ? `{dim}${item.space}/{/fg}` : "";
       ui.puts(`  {strike}📁 ${spacePrefix}${item.basename}{/strike}`);
     }
     const warnings = this.opts.deleteWarnings?.(markedItems.map((i) => i.path)) ?? [];
@@ -708,10 +941,10 @@ class Picker {
         this.deleteMode = false;
       } catch (e) {
         if (!(e instanceof SafetyError)) throw e;
-        this.deleteStatus = `Error: ${e.message}`;
+        this.status = `Error: ${e.message}`;
       }
     } else {
-      this.deleteStatus = "Delete cancelled";
+      this.status = "Delete cancelled";
       this.marked = [];
       this.deleteMode = false;
     }
