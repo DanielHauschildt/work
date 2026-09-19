@@ -29,15 +29,17 @@ expect "\$ "
 send "pwd\r"
 expect -re "/tries/2026-09-19-fresh-idea" { send_user "OK ctrl-t created 2026-09-19-fresh-idea and cd'd\n" } timeout { send_user "FAIL ctrl-t\n" }
 expect "\$ "
-# 4. Tab scope switch in the picker, from tries to labs via work
+# 4. the picker starts on the cwd's space (tries); Shift-Tab to labs, filter, Enter
 send "work\r"
-expect "Search:"
+expect -ex {[tries]}
+send "\x1b\[Z"
+after 150
 send "autofit"
 after 300
 send "\r"
 expect "\$ "
 send "pwd\r"
-expect -re "/labs/IMG-1-autofit" { send_user "OK all-scope picker found labs workspace\n" } timeout { send_user "FAIL all-scope\n" }
+expect -re "/labs/IMG-1-autofit" { send_user "OK picker started on the cwd's space; Shift-Tab to labs found the workspace\n" } timeout { send_user "FAIL start tab\n" }
 expect "\$ "
 # 5. try muscle memory + mv promote + back
 send "try new scratch && work mv labs --prefix IMG-2 && pwd\r"
@@ -46,8 +48,21 @@ expect "\$ "
 send "work - && pwd\r"
 expect -re "/labs/IMG-1-autofit" { send_user "OK work - returned to previous workspace\n" } timeout { send_user "FAIL back\n" }
 expect "\$ "
-# 6. + new tab: Tab past all/labs/tries, type a space name, Enter, Enter (date default), Esc
+# 5b. lanes: add lane ui (no repos), go back to the workspace, → in the picker (workspace preselected), Enter
+send "work lane ui && cd ..\r"
+expect "\$ "
 send "work\r"
+expect -ex {[labs]}
+send "\x1b\[C"
+expect "Enter cd"
+send "\r"
+expect "\$ "
+send "pwd\r"
+expect -re "/labs/IMG-1-autofit/ui" { send_user "OK right arrow opened the preselected workspace's lanes, Enter cd'd into lane ui\n" } timeout { send_user "FAIL lanes\n" }
+expect "\$ "
+# 6. + new tab (from outside the root, so the picker starts in all): Tab past all/labs/tries, type a space name,
+#    Enter, Enter (date default), Esc
+send "cd $env(S) && work\r"
 expect "Search:"
 send "\t"
 after 150

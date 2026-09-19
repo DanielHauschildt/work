@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { existsSync, readSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { splitDashDash, takeFlag, takeOption, takeOptions } from "./args.ts";
 import { complete, formatCandidates } from "./complete.ts";
 import { Emitter } from "./emit.ts";
@@ -30,9 +30,9 @@ import {
 } from "./lanes.ts";
 import { hasModel, loadModel, repoBranch, topoLanes } from "./model.ts";
 import { cloneDirName, dashify, isGitUri, spaceName, today, versionedBase } from "./naming.ts";
-import { expandHome, isInside, Root, type WorkspaceInfo } from "./root.ts";
+import { expandHome, isInside, real, Root, type WorkspaceInfo } from "./root.ts";
 import { parentRefOf, submit, sync } from "./stack.ts";
-import { type CreateOption, formatRelativeTime, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
+import { type CreateOption, formatRelativeTime, type LaneRow, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
 
 export const VERSION = "0.1.0";
 const DEFAULT_SPACE = "tries";
@@ -71,7 +71,7 @@ Shell setup (~/.zshrc, ~/.bashrc; fish: eval (work init … | string collect)):
   eval "$(work init ~/Work --shortcut tries --shortcut labs)"
 
 Usage:
-  work [query]                     Picker over all spaces (Tab switches scope)
+  work [query]                     Picker (starts on the space you're in, else all; Tab switches)
   work --space S [query]           Picker in space S (shortcuts: tries, labs, …)
   work new [--space S] [--prefix P] <name>   Create a workspace without the picker
   work - | work back               Previous workspace
@@ -101,6 +101,8 @@ Options:
 Picker keys: ↑↓/Ctrl-P/N navigate, Enter select/create, Ctrl-T new, Ctrl-D delete, Ctrl-R move,
              Tab/Shift-Tab switch space (last tab: + new space), Ctrl-A/E/B/F/K/W edit, Esc cancel
              Type space/name to filter or create in another (or a new) space.
+             → on a workspace: its lanes. Enter cd into a lane, type a name + Enter/Ctrl-T for a new lane
+             (on the highlighted one), Ctrl-D remove a lane, ← back.
 `;
 }
 
@@ -149,13 +151,32 @@ function badgesFor(workspacePath: string): string | undefined {
   return lanes.length === 1 && lanes[0] === DEFAULT_LANE ? repos.join(" ") : `${lanes.length} lanes: ${repos.join(" ")}`;
 }
 
-async function asyncDirty(workspacePath: string): Promise<boolean> {
-  for (const c of findWorktrees(workspacePath, 2)) {
+/** Any worktree below `dir` (a workspace or a lane) with uncommitted changes. */
+async function asyncDirty(dir: string): Promise<boolean> {
+  for (const c of findWorktrees(dir, 2)) {
     const p = Bun.spawn(["git", "-C", c, "status", "--porcelain"], { stdout: "pipe", stderr: "ignore" });
     const text = await new Response(p.stdout).text();
     if (text.trim()) return true;
   }
   return false;
+}
+
+/** Lanes of a workspace for the picker's lane view (parents first, like `work info`). */
+function laneRows(workspacePath: string): LaneRow[] {
+  const model = loadModel(workspacePath);
+  return topoLanes(model).map((name) => {
+    const lane = model.lanes[name]!;
+    const path = join(workspacePath, name);
+    return { name, path, branch: lane.branch, parent: lane.parent, repos: Object.keys(lane.repos), dirty: () => asyncDirty(path) };
+  });
+}
+
+/** The existing space the cwd is in (`<root>/<space>/…`), if any. */
+function cwdSpace(ctx: Ctx, spaces: string[]): string | undefined {
+  const rel = relative(ctx.root.path, real(ctx.cwd));
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return undefined;
+  const first = rel.split(sep)[0]!;
+  return spaces.includes(first) ? first : undefined;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -165,9 +186,10 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
   if (ctx.space) ctx.root.spacePath(ctx.space);
   const spaces = ctx.root.spaces();
   // scopes are existing spaces only; a shortcut whose space doesn't exist yet starts in "all" and creates there
-  // (the picker then asks for the new space's default prefix)
+  // (the picker then asks for the new space's default prefix). Without --space the cwd's space is the start tab.
   const scopes = ["*", ...spaces];
-  const startScope = ctx.space && spaces.includes(ctx.space) ? ctx.space : "*";
+  const here = ctx.space ? undefined : cwdSpace(ctx, spaces);
+  const startScope = ctx.space ? (spaces.includes(ctx.space) ? ctx.space : "*") : (here ?? "*");
   const visits = ctx.history.lastVisits();
   const now = new Date();
   const items: PickerItem[] = ctx.root.allWorkspaces().map((e) => {
@@ -181,9 +203,10 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       badges: badgesFor(e.path),
       stale: days !== undefined && now.getTime() - recency.getTime() > days * 86_400_000,
       dirty: hasModel(e.path) ? () => asyncDirty(e.path) : undefined,
+      lanes: () => laneRows(e.path),
     };
   });
-  const defaultSpace = ctx.space ?? DEFAULT_SPACE;
+  const defaultSpace = ctx.space ?? here ?? DEFAULT_SPACE;
   const result = await runPicker({
     items,
     scopes,
@@ -197,6 +220,7 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
     },
     deleteWarnings: (paths) => paths.flatMap((p) => removalWarnings(p)),
     rootPath: ctx.root.path,
+    selectedPath: ctx.root.locate(ctx.cwd)?.workspacePath,
     test: {
       renderOnce: ctx.test.exit,
       noCls: ctx.test.exit || Boolean(ctx.test.keys?.length),
@@ -213,7 +237,7 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
   }
   switch (result.type) {
     case "cd":
-      visit(ctx, result.path);
+      visit(ctx, result.workspace ?? result.path, result.path);
       return 0;
     case "mkdir": {
       const { path } = createWorkspace(ctx.root, result.space, result.name);
@@ -234,6 +258,26 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       info(`Moved ${workspace.space}/${workspace.name} → ${target.space}/${target.name}`);
       ctx.history.record(moved.path);
       ctx.emit.cd(moved.cd ?? moved.path);
+      return 0;
+    }
+    case "lane": {
+      const space = ctx.root.locate(result.workspace)!.space;
+      const path = createLane(ctx.root, result.workspace, {
+        name: result.name,
+        parent: result.parent,
+        repos: [],
+        cwd: ctx.cwd,
+        postAdd: ctx.root.spaceConfig(space).post_add,
+      });
+      info(`Lane ${result.name} on ${result.parent ?? "trunk"}: ${path}`);
+      visit(ctx, result.workspace, path);
+      return 0;
+    }
+    case "deleteLane": {
+      const dir = join(result.workspace, result.lane);
+      removeLane(ctx.root, result.workspace, result.lane);
+      info(`Deleted ${relative(ctx.root.path, dir)}`);
+      if (isInside(ctx.cwd, dir)) ctx.emit.cd(result.workspace);
       return 0;
     }
   }

@@ -65,15 +65,38 @@ Search: autofit▌
   📂 New tries/2026-09-19-autofit
   📂 New tries/autofit                           no date
 ──────────────────────────────────────────────────────────
-↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc
+↑↓ Enter  → Lanes  ^T New  ^D Delete  ^R Move  Tab Space  Esc
 ```
 
+- Starts on the space you're in (cursor on the current workspace); outside the root on all spaces. A shortcut
+  or `--space` picks the tab instead.
 - **Tab / Shift-Tab** switch between all spaces, each space, and `+ new` (type a name, Enter → new space).
-- Two create rows: the space's default prefix first (Ctrl-T takes it), the other variant (date ↔ no date) below.
+- In a space: two create rows, the space's default prefix first (Ctrl-T takes it), the other variant (date ↔ no
+  date) below. In all spaces: one create row per space with its default prefix — your default space first
+  (Ctrl-T), then the others alphabetically.
 - Type `space/name` to filter or create in another space; an unknown space is created — you're asked once
   whether its workspaces get a date prefix (stored in `<space>/.space.toml`).
 - try's keys: ↑↓ Ctrl-P/N, Enter, Ctrl-T new, Ctrl-D mark + Enter + `YES` delete, Ctrl-A/E/B/F/K/W/H editing, Esc;
   plus Ctrl-R move to `space/name`.
+
+**→ on a workspace** shows its lanes (← goes back to the list):
+
+```text
+📁 work › labs › IMG-1234-autofit
+──────────────────────────────────────────────────────────
+Search: ▌
+──────────────────────────────────────────────────────────
+→ 📁 root   IMG-1234-autofit        on main  cesdk-web
+  📁 ui     IMG-1234-autofit-ui     on root  cesdk-web  *
+  📁 guide  IMG-1234-autofit-guide  on root  docs
+──────────────────────────────────────────────────────────
+↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc
+```
+
+Enter cds into the lane. Type a name to get `📂 New lane on <lane>: <name>` — the new lane stacks on the lane you
+highlighted last and gets its repos (like `work lane`); Enter or Ctrl-T creates it. Ctrl-D removes the
+highlighted lane after `YES` (dirty or unpushed worktrees are listed first). `*` marks lanes with uncommitted
+changes.
 
 Spaces from the command line: `work space` (list), `work space new clients --prefix none`,
 `work space set labs --prefix IMG`.

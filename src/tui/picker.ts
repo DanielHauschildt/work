@@ -1,8 +1,9 @@
-// Interactive picker: port of try's TrySelector with a space bar (scopes), create rows per prefix, badges and move.
+// Interactive picker: port of try's TrySelector with a space bar (scopes), create rows per prefix, badges, move,
+// and a lane view per workspace (→ / ←).
 
 import { realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { spaceName, spaceNameError } from "../naming.ts";
+import { LANE_NAME, spaceName, spaceNameError } from "../naming.ts";
 import { calculateScore, dashify, formatRelativeTime, formatScore } from "./format.ts";
 import { type InputStream, TerminalInput } from "./input.ts";
 import { UI, type UIOutput } from "./ui.ts";
@@ -21,6 +22,21 @@ export interface PickerItem {
   /** render a dim "stale" badge */
   stale?: boolean;
   /** optional async check; when it resolves true a "*" badge is added and the list redrawn */
+  dirty?: () => Promise<boolean>;
+  /** lanes of the workspace (called once, when → opens the lane view); undefined = not a lane workspace */
+  lanes?: () => LaneRow[];
+}
+
+export interface LaneRow {
+  /** lane folder name */
+  name: string;
+  /** absolute lane path */
+  path: string;
+  branch: string;
+  /** parent lane, null = trunk */
+  parent: string | null;
+  repos: string[];
+  /** optional async check; when it resolves true a "*" is added and the list redrawn */
   dirty?: () => Promise<boolean>;
 }
 
@@ -51,6 +67,8 @@ export interface PickerOptions {
   deleteWarnings?: (paths: string[]) => string[];
   /** delete safety: every realpath must be inside rootPath */
   rootPath: string;
+  /** workspace path to put the cursor on when the picker starts with an empty query */
+  selectedPath?: string;
   now?: Date;
   test?: { renderOnce?: boolean; noCls?: boolean; keys?: string[]; confirm?: string; forceColors?: boolean };
   colors?: boolean;
@@ -60,10 +78,14 @@ export interface PickerOptions {
 }
 
 export type PickerResult =
-  | { type: "cd"; path: string }
+  /** `workspace` is set when `path` is a lane (history records the workspace) */
+  | { type: "cd"; path: string; workspace?: string }
   | { type: "mkdir"; space: string; name: string }
   | { type: "delete"; paths: string[] }
   | { type: "move"; from: string; to: string }
+  /** create lane `name` on `parent` in the workspace at path `workspace` */
+  | { type: "lane"; workspace: string; name: string; parent: string | null }
+  | { type: "deleteLane"; workspace: string; lane: string }
   | null;
 
 interface Row {
@@ -89,13 +111,25 @@ interface View {
   showSpace: boolean;
 }
 
+/** What the lane view shows for the current query. */
+interface LaneView {
+  rows: LaneRow[];
+  /** create row: new lane `name` on `parent` */
+  create: { name: string; parent: string } | null;
+}
+
+/** browseLanes() result when the user went back to the workspace list. */
+const BACK = Symbol("back");
+
 /** Pseudo scope for the "+ new" tab. Contains a space, so it can never be a space name. */
 const NEW_TAB = "+ new";
 const DATE_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 const PRINTABLE = /^[a-zA-Z0-9\-_. /]$/;
 const ALNUM = /[a-zA-Z0-9]/;
 const EXIT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
-const HELP = "↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
+const HELP = "↑↓ Enter  → Lanes  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
+const LANE_HELP = "↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc";
+const NO_DATE = new Date(Number.NaN);
 const HEADER = "📁 work";
 const HEADER_WIDTH = 7; // 📁 is two columns wide
 
@@ -154,8 +188,10 @@ class Picker {
   private restored = false;
   private needsRedraw = false;
   private needsRepaint = false;
-  private readonly dirty = new Map<PickerItem, boolean>();
+  /** async dirty state per item / lane row (by identity): false while pending or clean */
+  private readonly dirty = new Map<object, boolean>();
   private readonly createOptionsCache = new Map<string, CreateOption[]>();
+  private readonly lanesCache = new Map<PickerItem, LaneRow[]>();
 
   constructor(private readonly opts: PickerOptions) {
     const searchTerm = dashify(opts.query ?? "");
@@ -183,6 +219,7 @@ class Picker {
     let error: string | null = null;
     this.setupTerminal();
     try {
+      this.preselect();
       // In test mode with no keys, render once and exit without TTY requirements
       if (this.opts.test?.renderOnce && !this.testHadKeys) {
         this.render(this.view());
@@ -339,20 +376,39 @@ class Picker {
     });
   }
 
-  private startDirtyCheck(item: PickerItem): void {
-    if (!item.dirty || !this.running || this.dirty.has(item)) return;
-    this.dirty.set(item, false);
+  private startDirtyCheck(target: { dirty?: () => Promise<boolean> }): void {
+    if (!target.dirty || !this.running || this.dirty.has(target)) return;
+    this.dirty.set(target, false);
     const onResult = (isDirty: boolean): void => {
       if (!isDirty || !this.running) return;
-      this.dirty.set(item, true);
+      this.dirty.set(target, true);
       this.needsRepaint = true;
       this.terminal?.wake();
     };
     try {
-      item.dirty().then(onResult, () => {});
+      target.dirty().then(onResult, () => {});
     } catch {
       // a failing check just shows no badge
     }
+  }
+
+  /** Cursor on `selectedPath` (the workspace the caller is in) when starting without a query. */
+  private preselect(): void {
+    const path = this.opts.selectedPath;
+    if (!path || this.input.length > 0) return;
+    const idx = this.view().rows.findIndex((r) => r.item.path === path);
+    if (idx >= 0) this.cursorPos = idx;
+  }
+
+  /** Lanes of a workspace, loaded once (row identity keeps the async dirty state). */
+  private lanesOf(item: PickerItem): LaneRow[] | undefined {
+    if (!item.lanes) return undefined;
+    let lanes = this.lanesCache.get(item);
+    if (!lanes) {
+      lanes = item.lanes();
+      this.lanesCache.set(item, lanes);
+    }
+    return lanes;
   }
 
   // --- main loop --------------------------------------------------------------------------------
@@ -396,46 +452,21 @@ class Picker {
         case "\x0e": // Ctrl-N
           this.cursorPos = Math.min(this.cursorPos + 1, totalItems - 1);
           break;
-        case "\x1b[C": // Right arrow - ignore
-        case "\x1b[D": // Left arrow - ignore
-          break;
-        case "\x7f": // Backspace
-        case "\b": // Ctrl-H
-          if (this.inputCursorPos > 0) {
-            this.input.splice(this.inputCursorPos - 1, 1);
-            this.inputCursorPos -= 1;
+        case "\x1b[C": {
+          // Right arrow - lane view of the workspace (try ignores it)
+          const item = tries[this.cursorPos]?.item;
+          const lanes = item && this.lanesOf(item);
+          if (!item || !lanes) break;
+          if (lanes.length === 0) {
+            this.status = "no lanes — work add <repo>";
+            break;
           }
-          this.cursorPos = 0; // Reset list selection when typing
-          break;
-        case "\x01": // Ctrl-A - beginning of line
-          this.inputCursorPos = 0;
-          break;
-        case "\x05": // Ctrl-E - end of line
-          this.inputCursorPos = this.input.length;
-          break;
-        case "\x02": // Ctrl-B - backward char
-          this.inputCursorPos = Math.max(this.inputCursorPos - 1, 0);
-          break;
-        case "\x06": // Ctrl-F - forward char
-          this.inputCursorPos = Math.min(this.inputCursorPos + 1, this.input.length);
-          break;
-        case "\x0b": // Ctrl-K - kill to end of line
-          this.input = this.input.slice(0, this.inputCursorPos);
-          break;
-        case "\x17": {
-          // Ctrl-W - delete word backward (alphanumeric)
-          if (this.inputCursorPos > 0) {
-            let pos = this.inputCursorPos - 1;
-            // Skip trailing non-alphanumeric
-            while (pos >= 0 && !ALNUM.test(this.input[pos]!)) pos -= 1;
-            // Skip backward over alphanumeric chars
-            while (pos >= 0 && ALNUM.test(this.input[pos]!)) pos -= 1;
-            const newPos = pos + 1;
-            this.input.splice(newPos, this.inputCursorPos - newPos);
-            this.inputCursorPos = newPos;
-          }
+          const result = await this.browseLanes(item, lanes);
+          if (result !== BACK) return result;
           break;
         }
+        case "\x1b[D": // Left arrow - ignore
+          break;
         case "\x04": {
           // Ctrl-D - toggle mark for deletion
           if (this.cursorPos < tries.length) {
@@ -486,13 +517,58 @@ class Picker {
           }
           break;
         default:
-          // Only accept printable characters, not escape sequences
-          if (PRINTABLE.test(key)) {
-            this.input.splice(this.inputCursorPos, 0, key);
-            this.inputCursorPos += 1;
-            this.cursorPos = 0; // Reset list selection when typing
-          }
+          this.editKey(key);
       }
+    }
+  }
+
+  /** Search line editing (try's keys); false when `key` isn't one. */
+  private editKey(key: string): boolean {
+    switch (key) {
+      case "\x7f": // Backspace
+      case "\b": // Ctrl-H
+        if (this.inputCursorPos > 0) {
+          this.input.splice(this.inputCursorPos - 1, 1);
+          this.inputCursorPos -= 1;
+        }
+        this.cursorPos = 0; // Reset list selection when typing
+        return true;
+      case "\x01": // Ctrl-A - beginning of line
+        this.inputCursorPos = 0;
+        return true;
+      case "\x05": // Ctrl-E - end of line
+        this.inputCursorPos = this.input.length;
+        return true;
+      case "\x02": // Ctrl-B - backward char
+        this.inputCursorPos = Math.max(this.inputCursorPos - 1, 0);
+        return true;
+      case "\x06": // Ctrl-F - forward char
+        this.inputCursorPos = Math.min(this.inputCursorPos + 1, this.input.length);
+        return true;
+      case "\x0b": // Ctrl-K - kill to end of line
+        this.input = this.input.slice(0, this.inputCursorPos);
+        return true;
+      case "\x17": {
+        // Ctrl-W - delete word backward (alphanumeric)
+        if (this.inputCursorPos > 0) {
+          let pos = this.inputCursorPos - 1;
+          // Skip trailing non-alphanumeric
+          while (pos >= 0 && !ALNUM.test(this.input[pos]!)) pos -= 1;
+          // Skip backward over alphanumeric chars
+          while (pos >= 0 && ALNUM.test(this.input[pos]!)) pos -= 1;
+          const newPos = pos + 1;
+          this.input.splice(newPos, this.inputCursorPos - newPos);
+          this.inputCursorPos = newPos;
+        }
+        return true;
+      }
+      default:
+        // Only accept printable characters, not escape sequences
+        if (!PRINTABLE.test(key)) return false;
+        this.input.splice(this.inputCursorPos, 0, key);
+        this.inputCursorPos += 1;
+        this.cursorPos = 0; // Reset list selection when typing
+        return true;
     }
   }
 
@@ -569,28 +645,45 @@ class Picker {
   private render(view: View): void {
     const ui = this.ui;
     const termWidth = ui.width();
-    const termHeight = ui.height();
     const tries = view.rows;
-    const matchQuery = view.rest;
-
-    // Use actual terminal width for separator lines
-    const separator = "─".repeat(Math.max(termWidth - 1, 0));
 
     // Header: space bar
     ui.puts(this.spaceBar(termWidth - 1));
-    ui.puts(`{dim}${separator}{/fg}`);
+    this.renderSearch(this.scope === NEW_TAB ? "New space:" : "Search:");
+    if (this.scope === NEW_TAB) ui.puts(`  {dim}${this.newSpaceHint()}{/fg}`);
 
-    // Search input with cursor at correct position
+    this.renderWindow(tries.length, view.creates.length, (idx, isSelected) => {
+      if (idx < tries.length) this.renderRow(tries[idx]!, isSelected, termWidth, view.rest, view.showSpace);
+      else this.renderCreateRow(view.creates[idx - tries.length]!, isSelected, termWidth, view.rest);
+    });
+
+    const help = this.deleteMode
+      ? `{strike} DELETE MODE {/strike} ${this.marked.length} marked  |  Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel`
+      : `{dim}${HELP}{/fg}`;
+    this.renderFooter(help);
+  }
+
+  private separator(): string {
+    // Use actual terminal width for separator lines
+    return `{dim}${"─".repeat(Math.max(this.ui.width() - 1, 0))}{/fg}`;
+  }
+
+  /** Separator, search input with the cursor at its position, separator. */
+  private renderSearch(label: string): void {
     const beforeCursor = this.input.slice(0, this.inputCursorPos).join("");
     const charAtCursor = this.input[this.inputCursorPos] ?? " ";
     const afterCursor = this.input.slice(this.inputCursorPos + 1).join("");
-    const label = this.scope === NEW_TAB ? "New space:" : "Search:";
-    ui.puts(`{dim}${label}{/fg} {b}${beforeCursor}\x1b[7m${charAtCursor}\x1b[27m${afterCursor}{/b}`);
-    ui.puts(`{dim}${separator}{/fg}`);
+    this.ui.puts(this.separator());
+    this.ui.puts(`{dim}${label}{/fg} {b}${beforeCursor}\x1b[7m${charAtCursor}\x1b[27m${afterCursor}{/b}`);
+    this.ui.puts(this.separator());
+  }
 
+  /** Visible part of `rows` + `creates` rows around the cursor, then the scroll indicator when needed. */
+  private renderWindow(rows: number, creates: number, draw: (idx: number, isSelected: boolean) => void): void {
+    const ui = this.ui;
     // Calculate visible window based on actual terminal height
-    const maxVisible = Math.max(termHeight - 8, 3);
-    const totalItems = tries.length + view.creates.length;
+    const maxVisible = Math.max(ui.height() - 8, 3);
+    const totalItems = rows + creates;
 
     // Adjust scroll window
     if (this.cursorPos < this.scrollOffset) {
@@ -601,45 +694,34 @@ class Picker {
 
     const visibleEnd = Math.min(this.scrollOffset + maxVisible, totalItems);
 
-    if (this.scope === NEW_TAB) ui.puts(`  {dim}${this.newSpaceHint()}{/fg}`);
-
     for (let idx = this.scrollOffset; idx < visibleEnd; idx++) {
       // Add blank line before the create rows; not while scrolling, a full window has no room for it
-      if (idx === tries.length && tries.length > 0 && totalItems <= maxVisible) ui.puts();
+      if (idx === rows && rows > 0 && totalItems <= maxVisible) ui.puts();
 
       const isSelected = idx === this.cursorPos;
       ui.print(isSelected ? "{b}→ {/b}" : "  ");
-
-      if (idx < tries.length) {
-        this.renderRow(tries[idx]!, isSelected, termWidth, matchQuery, view.showSpace);
-      } else {
-        this.renderCreateRow(view.creates[idx - tries.length]!, isSelected, termWidth, view.rest);
-      }
-
+      draw(idx, isSelected);
       // End selection and reset all formatting
       ui.puts();
     }
 
     // Scroll indicator if needed
     if (totalItems > maxVisible) {
-      ui.puts(`{dim}${separator}{/fg}`);
+      ui.puts(this.separator());
       ui.puts(`{dim}[${this.scrollOffset + 1}-${visibleEnd}/${totalItems}]{/fg}`);
     }
+  }
 
-    // Instructions at bottom
-    ui.puts(`{dim}${separator}{/fg}`);
-
+  /** Separator and the status line (shown once) or `help`, then flush. */
+  private renderFooter(help: string): void {
+    this.ui.puts(this.separator());
     if (this.status) {
-      ui.puts(`{b}${this.status}{/b}`);
+      this.ui.puts(`{b}${this.status}{/b}`);
       this.status = null; // Clear after showing
-    } else if (this.deleteMode) {
-      const count = this.marked.length;
-      ui.puts(`{strike} DELETE MODE {/strike} ${count} marked  |  Ctrl-D: Toggle  Enter: Confirm  Esc: Cancel`);
     } else {
-      ui.puts(`{dim}${HELP}{/fg}`);
+      this.ui.puts(help);
     }
-
-    ui.flush();
+    this.ui.flush();
   }
 
   /**
@@ -920,60 +1002,17 @@ class Picker {
     const markedItems = view.rows.filter((t) => this.marked.includes(t.item.path)).map((t) => t.item);
     if (markedItems.length === 0) return null;
 
-    const ui = this.ui;
     const n = markedItems.length;
-    ui.cls();
-    ui.puts(`{h2}Delete ${n} Director${n === 1 ? "y" : "ies"}{reset}`);
-    ui.puts();
-    for (const item of markedItems) {
-      const spacePrefix = view.showSpace ? `{dim}${item.space}/{/fg}` : "";
-      ui.puts(`  {strike}📁 ${spacePrefix}${item.basename}{/strike}`);
-    }
+    const lines = markedItems.map((item) => `${view.showSpace ? `{dim}${item.space}/{/fg}` : ""}${item.basename}`);
     const warnings = this.opts.deleteWarnings?.(markedItems.map((i) => i.path)) ?? [];
-    if (warnings.length > 0) {
-      ui.puts();
-      for (const w of warnings) ui.puts(`  {b}${w}{/b}`);
-    }
-    ui.puts();
-    ui.puts("{b}Type {/b}YES{b} to confirm deletion: {/b}");
-    ui.flush();
-    this.stderr.write("\x1b[?25h"); // Show cursor after flushing
-
-    // Confirmation input: in tests, read from test keys; otherwise read from the terminal
-    let confirmation: string;
-    const testConfirm = this.opts.test?.confirm;
-    if (this.testKeys && this.testKeys.length > 0) {
-      confirmation = this.takeTestLine();
-    } else if (testConfirm !== undefined || !this.ui.isTTY) {
-      confirmation = chomp(testConfirm ?? (await this.getTerminal().readLine()) ?? "");
-    } else {
-      confirmation = await this.cookedLine();
-    }
+    const confirmation = await this.askYes(`Delete ${n} Director${n === 1 ? "y" : "ies"}`, lines, warnings);
 
     let result: PickerResult = null;
     if (confirmation === "YES") {
       try {
-        let baseReal: string;
-        try {
-          baseReal = realpathSync(this.opts.rootPath);
-        } catch (e) {
-          throw new SafetyError(realpathError(e, this.opts.rootPath));
-        }
         // Validate all paths first
-        const validated: string[] = [];
-        for (const item of markedItems) {
-          let targetReal: string;
-          try {
-            targetReal = realpathSync(item.path);
-          } catch (e) {
-            throw new SafetyError(realpathError(e, item.path));
-          }
-          if (!targetReal.startsWith(`${baseReal}/`)) {
-            throw new SafetyError(`Safety check failed: ${targetReal} is not inside ${baseReal}`);
-          }
-          validated.push(targetReal);
-        }
-        result = { type: "delete", paths: validated };
+        const paths = markedItems.map((item) => this.insideRoot(item.path));
+        result = { type: "delete", paths };
         this.marked = [];
         this.deleteMode = false;
       } catch (e) {
@@ -990,6 +1029,243 @@ class Picker {
     this.stderr.write("\x1b[?25l");
     return result;
   }
+
+  /** try's YES screen: title, struck-through names, warnings; returns what was typed. */
+  private async askYes(title: string, names: string[], warnings: string[]): Promise<string> {
+    const ui = this.ui;
+    ui.cls();
+    ui.puts(`{h2}${title}{reset}`);
+    ui.puts();
+    for (const name of names) ui.puts(`  {strike}📁 ${name}{/strike}`);
+    if (warnings.length > 0) {
+      ui.puts();
+      for (const w of warnings) ui.puts(`  {b}${w}{/b}`);
+    }
+    ui.puts();
+    ui.puts("{b}Type {/b}YES{b} to confirm deletion: {/b}");
+    ui.flush();
+    this.stderr.write("\x1b[?25h"); // Show cursor after flushing
+
+    // Confirmation input: in tests, read from test keys; otherwise read from the terminal
+    const testConfirm = this.opts.test?.confirm;
+    if (this.testKeys && this.testKeys.length > 0) return this.takeTestLine();
+    if (testConfirm !== undefined || !this.ui.isTTY) return chomp(testConfirm ?? (await this.getTerminal().readLine()) ?? "");
+    return this.cookedLine();
+  }
+
+  /** Realpath of `path`, which must be inside the root (try's delete safety check); throws SafetyError. */
+  private insideRoot(path: string): string {
+    const real = (p: string): string => {
+      try {
+        return realpathSync(p);
+      } catch (e) {
+        throw new SafetyError(realpathError(e, p));
+      }
+    };
+    const baseReal = real(this.opts.rootPath);
+    const targetReal = real(path);
+    if (!targetReal.startsWith(`${baseReal}/`)) {
+      throw new SafetyError(`Safety check failed: ${targetReal} is not inside ${baseReal}`);
+    }
+    return targetReal;
+  }
+
+  // --- lane view --------------------------------------------------------------------------------
+
+  /**
+   * → on a workspace: its lanes, filtered by the query, plus a create row for a new lane. Returns a result, null
+   * (Esc: cancel the picker) or BACK (←: the workspace list is restored with the cursor on `item`).
+   */
+  private async browseLanes(item: PickerItem, lanes: LaneRow[]): Promise<PickerResult | typeof BACK> {
+    const saved = {
+      input: this.input,
+      inputCursorPos: this.inputCursorPos,
+      scrollOffset: this.scrollOffset,
+      deleteMode: this.deleteMode,
+    };
+    this.input = [];
+    this.inputCursorPos = 0;
+    this.cursorPos = 0;
+    this.scrollOffset = 0;
+    this.deleteMode = false;
+    let parent = lanes[0]!.name;
+
+    for (;;) {
+      const view = this.laneView(lanes, () => parent);
+      const total = view.rows.length + (view.create ? 1 : 0);
+      this.cursorPos = Math.min(Math.max(this.cursorPos, 0), Math.max(total - 1, 0));
+      const highlighted = view.rows[this.cursorPos];
+      if (highlighted) {
+        parent = highlighted.name;
+        if (view.create) view.create.parent = parent;
+      }
+
+      this.renderLanes(item, lanes, view);
+
+      const key = await this.readKey();
+      if (key === null) continue;
+
+      switch (key) {
+        case "\r":
+          if (highlighted) return { type: "cd", path: highlighted.path, workspace: item.path };
+          if (view.create) return { type: "lane", workspace: item.path, ...view.create };
+          break;
+        case "\x14": // Ctrl-T - new lane
+          if (view.create) return { type: "lane", workspace: item.path, ...view.create };
+          this.status = this.laneNameProblem(lanes) ?? null;
+          break;
+        case "\x1b[A": // Up arrow
+        case "\x10": // Ctrl-P
+          this.cursorPos = Math.max(this.cursorPos - 1, 0);
+          break;
+        case "\x1b[B": // Down arrow
+        case "\x0e": // Ctrl-N
+          this.cursorPos = Math.min(this.cursorPos + 1, total - 1);
+          break;
+        case "\x04": {
+          // Ctrl-D - remove lane
+          if (!highlighted) break;
+          const result = await this.confirmLaneRemoval(item, highlighted);
+          if (result) return result;
+          break;
+        }
+        case "\x1b[D": {
+          // Left arrow - back to the workspace list, cursor on this workspace
+          this.input = saved.input;
+          this.inputCursorPos = saved.inputCursorPos;
+          this.scrollOffset = saved.scrollOffset;
+          this.deleteMode = saved.deleteMode;
+          const idx = this.view().rows.findIndex((r) => r.item === item);
+          this.cursorPos = Math.max(idx, 0);
+          return BACK;
+        }
+        case "\x03": // Ctrl-C
+        case "\x1b": // ESC
+          return null;
+        default:
+          this.editKey(key);
+      }
+    }
+  }
+
+  private laneName(): string {
+    return dashify(this.query.trim());
+  }
+
+  /** Why the query can't be a new lane name, or undefined. */
+  private laneNameProblem(lanes: LaneRow[]): string | undefined {
+    const name = this.laneName();
+    if (name === "") return "Type a name for the new lane";
+    if (!LANE_NAME.test(name)) return `Invalid lane name: ${name}`;
+    if (lanes.some((l) => l.name === name)) return `Lane ${name} already exists`;
+    return undefined;
+  }
+
+  private laneView(lanes: LaneRow[], parent: () => string): LaneView {
+    const query = this.query;
+    const rows =
+      query === ""
+        ? lanes
+        : lanes
+            .map((lane) => ({ lane, score: calculateScore(lane.name, query, NO_DATE, this.now) }))
+            .filter((r) => r.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .map((r) => r.lane);
+    const create = this.laneNameProblem(lanes) === undefined ? { name: this.laneName(), parent: parent() } : null;
+    return { rows, create };
+  }
+
+  private renderLanes(item: PickerItem, lanes: LaneRow[], view: LaneView): void {
+    const ui = this.ui;
+    const termWidth = ui.width();
+    // Header: breadcrumb
+    ui.puts(`{h1}${HEADER}{reset}{dim} › ${item.space} › {/fg}{section}${item.basename}{/section}`);
+    this.renderSearch("Search:");
+
+    // column widths over all lanes, so filtering doesn't shift them
+    const widths = {
+      name: Math.min(Math.max(...lanes.map((l) => len(l.name))), 24),
+      branch: Math.min(Math.max(...lanes.map((l) => len(l.branch))), 40),
+      on: Math.min(Math.max(...lanes.map((l) => len(parentLabel(l)))), 24),
+    };
+    const query = this.query;
+    this.renderWindow(view.rows.length, view.create ? 1 : 0, (idx, isSelected) => {
+      const lane = view.rows[idx];
+      if (lane) {
+        this.renderLaneRow(lane, isSelected, termWidth, query, widths);
+      } else if (view.create) {
+        ui.print("📂 ");
+        if (isSelected) ui.print("{section}");
+        ui.print(`New lane on ${view.create.parent}: ${view.create.name}`);
+        if (isSelected) ui.print("{/section}");
+      }
+    });
+
+    this.renderFooter(`{dim}${LANE_HELP}{/fg}`);
+  }
+
+  /** `📁 ui     IMG-1234-autofit-ui     on root  cesdk-web docs  *`: aligned columns, trailing ones dropped when too wide. */
+  private renderLaneRow(
+    lane: LaneRow,
+    isSelected: boolean,
+    termWidth: number,
+    query: string,
+    widths: { name: number; branch: number; on: number },
+  ): void {
+    const ui = this.ui;
+    this.startDirtyCheck(lane);
+    const available = termWidth - 5 - 1; // "→ 📁 " and one column at the end
+
+    let name = lane.name;
+    if (len(name) > available && available > 2) name = `${take(name, available - 1)}…`;
+    ui.print("📁 ");
+    if (isSelected) ui.print("{section}");
+    ui.print(query !== "" ? highlightMatches(name, query) : name);
+    if (isSelected) ui.print("{/section}");
+
+    const columns: Array<[string, number]> = [
+      [lane.branch, widths.branch],
+      [parentLabel(lane), widths.on],
+      [lane.repos.join(" "), 0],
+      [this.dirty.get(lane) === true ? "*" : "", 0],
+    ];
+    let printed = len(name); // columns printed so far
+    let column = Math.max(printed, widths.name); // where the current column ends
+    for (const [text, width] of columns) {
+      if (!text) continue;
+      const start = column + 2;
+      if (start + len(text) > available) break;
+      ui.print(`${" ".repeat(start - printed)}{dim}${text}{/fg}`);
+      printed = start + len(text);
+      column = start + Math.max(len(text), width);
+    }
+  }
+
+  /** Ctrl-D on a lane: YES screen with the lane's warnings. */
+  private async confirmLaneRemoval(item: PickerItem, lane: LaneRow): Promise<PickerResult> {
+    const warnings = this.opts.deleteWarnings?.([lane.path]) ?? [];
+    const confirmation = await this.askYes(`Remove lane ${lane.name}`, [`${item.basename}/${lane.name}`], warnings);
+
+    let result: PickerResult = null;
+    if (confirmation === "YES") {
+      try {
+        this.insideRoot(lane.path);
+        result = { type: "deleteLane", workspace: item.path, lane: lane.name };
+      } catch (e) {
+        if (!(e instanceof SafetyError)) throw e;
+        this.status = `Error: ${e.message}`;
+      }
+    } else {
+      this.status = "Remove cancelled";
+    }
+
+    this.stderr.write("\x1b[?25l");
+    return result;
+  }
+}
+
+function parentLabel(lane: LaneRow): string {
+  return `on ${lane.parent ?? "main"}`;
 }
 
 function highlightMatches(text: string, query: string): string {

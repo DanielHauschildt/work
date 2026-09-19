@@ -315,6 +315,86 @@ describe("spaces", () => {
   });
 });
 
+describe("picker: start tab and lanes", () => {
+  const RIGHT = "\x1b[C";
+  const DOWN = "\x1b[B";
+  const CTRL_D = "\x04";
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  const header = (r: Res) => plain(r.stderr).split("\n")[0];
+
+  test("start tab follows the cwd's space, the current workspace is preselected, --space wins", () => {
+    for (const d of ["tries/a", "labs/b", "labs/c/deep"]) mkdirSync(join(sb.root, d), { recursive: true });
+    const inside = work(["--and-exit"], { cwd: join(sb.root, "labs", "c", "deep") });
+    expect(header(inside)).toContain("[labs]");
+    expect(plain(inside.stderr)).toMatch(/\n→ 📁 c +/);
+    expect(header(work(["--and-exit"], { cwd: join(sb.root, "labs") }))).toContain("[labs]");
+    expect(header(work(["--and-exit"]))).toContain("[all]");
+    expect(header(work(["--space", "tries", "--and-exit"], { cwd: join(sb.root, "labs", "c") }))).toContain("[tries]");
+    // creation targets the cwd's space
+    const created = work(["--and-keys", "x\r"], { cwd: join(sb.root, "labs", "b"), wrapper: true });
+    expect(created.code).toBe(0);
+    expect(created.emitted).toBe(`cd '${join(sb.root, "labs", `${TODAY}-x`)}'\n`);
+  });
+
+  test("→ on a workspace without lanes shows a hint", () => {
+    mkdirSync(join(sb.root, "tries", "plain"), { recursive: true });
+    const r = work(["--and-keys", RIGHT], { cwd: join(sb.root, "tries", "plain") });
+    expect(plain(r.stderr)).toContain("\nno lanes — work add <repo>\n");
+  });
+
+  test("→ lanes: Enter cds into a lane, a new lane is created after the picker, Ctrl-D + YES removes one", () => {
+    const app = makeRemote(sb, "app");
+    const worktree = work(["clone", app, "exp"]).stdout.trim();
+    const ws = join(sb.root, "tries", "exp");
+    expect(worktree).toBe(join(ws, "root", "app"));
+
+    const cd = work(["--and-keys", `${RIGHT}\r`], { cwd: ws, wrapper: true });
+    expect(cd.code).toBe(0);
+    expect(cd.emitted).toBe(`cd '${join(ws, "root")}'\n`);
+    // history records the workspace, not the lane
+    const last = readFileSync(join(sb.root, ".work", "history.jsonl"), "utf8").trim().split("\n").at(-1)!;
+    expect(JSON.parse(last).p).toBe("tries/exp");
+
+    // typed in the lane view: new lane "ui" on the highlighted lane (root), with root's repos
+    const lane = work(["--and-keys", `${RIGHT}ui\r`], { cwd: worktree, wrapper: true });
+    expect(lane.code).toBe(0);
+    expect(lane.emitted).toBe(`cd '${join(ws, "ui")}'\n`);
+    expect(g(join(ws, "ui", "app"), "branch", "--show-current")).toBe("exp-ui");
+    const model = () => JSON.parse(readFileSync(join(ws, ".work.json"), "utf8"));
+    expect(model().lanes.ui.parent).toBe("root");
+
+    // the lane view lists both lanes, parents first
+    const view = work(["--and-keys", RIGHT], { cwd: ws });
+    const lines = plain(view.stderr).split("\n");
+    expect(lines).toContain("📁 work › tries › exp");
+    expect(lines).toContain("→ 📁 root  exp     on main  app");
+    expect(lines).toContain("  📁 ui    exp-ui  on root  app");
+
+    const keep = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}NO\r`], { cwd: join(ws, "ui") });
+    expect(keep.code).toBe(1);
+    expect(plain(keep.stderr)).toContain("Remove cancelled");
+    expect(existsSync(join(ws, "ui", "app"))).toBe(true);
+
+    const rm = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: join(ws, "ui", "app"), wrapper: true });
+    expect(rm.code).toBe(0);
+    expect(existsSync(join(ws, "ui"))).toBe(false);
+    expect(model().lanes.ui).toBeUndefined();
+    expect(rm.emitted).toBe(`cd '${ws}'\n`);
+    expect(g(join(ws, "root", "app"), "worktree", "list")).not.toContain("/ui/");
+  });
+
+  test("creating a lane that fails reports the error like other commands", () => {
+    const app = makeRemote(sb, "app");
+    work(["clone", app, "exp"]);
+    const ws = join(sb.root, "tries", "exp");
+    mkdirSync(join(ws, "stray"));
+    const r = work(["--and-keys", `${RIGHT}stray\r`], { cwd: ws });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`${join(ws, "stray")} already exists`);
+  });
+});
+
 describe("shell integration", () => {
   for (const shell of ["zsh", "bash"]) {
     test(`${shell}: shortcut creates and cds, back returns, completion answers`, () => {

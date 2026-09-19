@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { type CreateOption, type PickerItem, type PickerOptions, parseTestKeys, runPicker } from "../../src/tui/index.ts";
+import { type CreateOption, type LaneRow, type PickerItem, type PickerOptions, parseTestKeys, runPicker } from "../../src/tui/index.ts";
 import { capture, pick, plain, tmpRoot, today } from "./helpers.ts";
 
 const NOW = new Date("2026-09-19T12:00:00Z");
@@ -134,7 +134,7 @@ describe("space bar and footer", () => {
 
   test("compact footer", async () => {
     const { out } = await pick({ ...base(), scope: "tries", test: { renderOnce: true } });
-    expect(plain(out)).toContain("\n↑↓ Enter  ^T New  ^D Delete  ^R Move  Tab Space  Esc\n");
+    expect(plain(out)).toContain("\n↑↓ Enter  → Lanes  ^T New  ^D Delete  ^R Move  Tab Space  Esc\n");
   });
 
   test("all scope shows a dim space/ prefix; matching uses the basename only", async () => {
@@ -323,7 +323,7 @@ describe("many spaces", () => {
     const { result, out } = await run([..."new", ...down(20), "\r"]);
     expect(result).toEqual({ type: "mkdir", space: order[20]!, name: "new" });
     const f = frames(out);
-    for (const frame of f) expect(frame.match(/→ /g)?.length ?? 0).toBeLessThanOrEqual(1);
+    for (const frame of f) expect(frame.match(/^→ /gm)?.length ?? 0).toBeLessThanOrEqual(1);
     const last = f.at(-1)!;
     // window of 16 rows ending at the cursor (row 21 of 30)
     expect(last).toContain("[6-21/30]");
@@ -438,7 +438,7 @@ describe("new space from a create row", () => {
     expect(result).toBeNull();
     const f = frames(out);
     expect(f.at(-2)).toContain('Error: space "ideas" is not allowed');
-    expect(f.at(-1)).toContain("↑↓ Enter  ^T New");
+    expect(f.at(-1)).toContain("↑↓ Enter  → Lanes  ^T New");
   });
 
   test("Ctrl-T prompt into a new space", async () => {
@@ -667,6 +667,189 @@ describe("+ new tab", () => {
     expect(calls).toEqual([]);
     expect(activeTabs(out).at(-1)).toBe("+ new");
     expect(frames(out).at(-1)).toContain("New space: ideas");
+  });
+});
+
+describe("lane view", () => {
+  const ws = () => byName("IMG-1234-autofit");
+  function lane(name: string, parent: string | null, repos: string[], extra: Partial<LaneRow> = {}): LaneRow {
+    const path = join(ws().path, name);
+    mkdirSync(path, { recursive: true });
+    const branch = name === "root" ? "IMG-1234-autofit" : `IMG-1234-autofit-${name}`;
+    return { name, path, branch, parent, repos, ...extra };
+  }
+  const threeLanes = () => [lane("root", null, ["cesdk-web"]), lane("ui", "root", ["cesdk-web"]), lane("guide", "root", ["docs"])];
+  /** labs tab: IMG-1234-autofit (with lanes) first, IMG-99-labs-thing second */
+  function run(keys: string[], extra: Partial<PickerOptions> = {}, lanes: () => LaneRow[] = threeLanes) {
+    const list = items.map((i) => (i === ws() ? { ...i, lanes } : i));
+    return pick({ ...base(), items: list, scope: "labs", test: { keys }, ...extra });
+  }
+  /** every frame, including lane-view frames (breadcrumb header) */
+  const allFrames = (out: string) =>
+    plain(out)
+      .split(/(?=📁 work)/)
+      .filter((f) => f.startsWith("📁 work"));
+  const listOf = (frame: string) => frame.split("\n").slice(4, -3);
+
+  test("→ opens the lanes: breadcrumb, rows, footer", async () => {
+    const { result, out } = await run(["\x1b[C"]);
+    expect(result).toBeNull(); // keys exhausted → Esc cancels the picker
+    const f = allFrames(out).at(-1)!;
+    expect(f.split("\n")[0]).toBe("📁 work › labs › IMG-1234-autofit");
+    expect(listOf(f)).toEqual([
+      "→ 📁 root   IMG-1234-autofit        on main  cesdk-web",
+      "  📁 ui     IMG-1234-autofit-ui     on root  cesdk-web",
+      "  📁 guide  IMG-1234-autofit-guide  on root  docs",
+    ]);
+    expect(f).toContain("\n↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc\n");
+    expect(out).toContain("\x1b[1;38;5;208m📁 work\x1b[0m\x1b[39m\x1b[49m\x1b[90m › labs › \x1b[39m\x1b[1mIMG-1234-autofit\x1b[0m");
+  });
+
+  test("Enter on a lane cds into it (the workspace is reported for history)", async () => {
+    const { result } = await run(["\x1b[C", "\x1b[B", "\r"]);
+    expect(result).toEqual({ type: "cd", path: join(ws().path, "ui"), workspace: ws().path });
+  });
+
+  test("← goes back with the cursor on the workspace and the query restored", async () => {
+    const other = byName("IMG-99-labs-thing");
+    const list = items.map((i) => (i === other ? { ...i, lanes: threeLanes } : i));
+    const back = await pick({ ...base(), items: list, scope: "labs", test: { keys: ["\x1b[B", "\x1b[C", ..."gu", "\x1b[D", "\r"] } });
+    expect(back.result).toEqual({ type: "cd", path: other.path });
+    const f = allFrames(back.out);
+    expect(f.at(-2)).toContain("Search: gu");
+    expect(f.at(-1)).toContain("→ 📁 IMG-99-labs-thing");
+
+    const withQuery = await pick({ ...base(), items: list, scope: "labs", test: { keys: [..."img-9", "\x1b[C", "\x1b[D"] } });
+    const last = allFrames(withQuery.out).at(-1)!;
+    expect(last).toContain("Search: img-9");
+    expect(last).toContain("→ 📁 IMG-99-labs-thing");
+  });
+
+  test("typing filters lanes; an existing name gets no create row", async () => {
+    const { out } = await run(["\x1b[C", ..."ui"]);
+    // fuzzy like the workspace list: "ui" also matches g-u-i-de
+    expect(listOf(allFrames(out).at(-1)!)).toEqual([
+      "→ 📁 ui     IMG-1234-autofit-ui     on root  cesdk-web",
+      "  📁 guide  IMG-1234-autofit-guide  on root  docs",
+    ]);
+  });
+
+  test("create row on the highlighted lane; Enter returns the new lane", async () => {
+    const { result, out } = await run(["\x1b[C", "\x1b[B", ..."fix", "\r"]);
+    expect(result).toEqual({ type: "lane", workspace: ws().path, name: "fix", parent: "ui" });
+    expect(listOf(allFrames(out).at(-1)!)).toEqual(["→ 📂 New lane on ui: fix"]);
+  });
+
+  test("Ctrl-T creates on the highlighted lane", async () => {
+    const { result, out } = await run(["\x1b[C", ..."g", "\x14"]);
+    expect(result).toEqual({ type: "lane", workspace: ws().path, name: "g", parent: "guide" });
+    const list = listOf(allFrames(out).at(-1)!);
+    expect(list[0]).toStartWith("→ 📁 guide");
+    expect(list.at(-1)).toBe("  📂 New lane on guide: g");
+  });
+
+  test("whitespace in a lane name becomes -", async () => {
+    const { result } = await run(["\x1b[C", ..."my lane", "\r"]);
+    expect(result).toEqual({ type: "lane", workspace: ws().path, name: "my-lane", parent: "root" });
+  });
+
+  test("Ctrl-T without a valid new name says why", async () => {
+    const { result, out } = await run(["\x1b[C", "\x14", ..."ui", "\x14", "\x7f", "\x7f", ..."a/b", "\x14"]);
+    expect(result).toBeNull();
+    const p = plain(out);
+    expect(p).toContain("\nType a name for the new lane\n");
+    expect(p).toContain("\nLane ui already exists\n");
+    expect(p).toContain("\nInvalid lane name: a/b\n");
+  });
+
+  test("Ctrl-D + YES removes a lane; warnings come from deleteWarnings(lane path)", async () => {
+    const seen: string[][] = [];
+    const { result, out } = await run(["\x1b[C", "\x1b[B", "\x04", ..."YES", "\r"], {
+      deleteWarnings: (paths) => {
+        seen.push(paths);
+        return ["cesdk-web: uncommitted changes"];
+      },
+    });
+    expect(result).toEqual({ type: "deleteLane", workspace: ws().path, lane: "ui" });
+    expect(seen).toEqual([[join(ws().path, "ui")]]);
+    expect(plain(out)).toContain(
+      "Remove lane ui\n  📁 IMG-1234-autofit/ui\n  cesdk-web: uncommitted changes\nType YES to confirm deletion: ",
+    );
+  });
+
+  test("a wrong confirmation keeps the lane", async () => {
+    const { result, out } = await run(["\x1b[C", "\x1b[B", "\x04", ..."NO", "\r"]);
+    expect(result).toBeNull();
+    const last = allFrames(out).at(-1)!;
+    expect(last).toStartWith("📁 work › labs › IMG-1234-autofit");
+    expect(last).toContain("\nRemove cancelled\n");
+    expect(last).toContain("→ 📁 ui");
+  });
+
+  test("a lane outside the root fails the safety check", async () => {
+    const outside = tmpRoot("work-tui-lane-outside-");
+    try {
+      const lanes = () => [{ ...lane("root", null, []), path: outside }];
+      const { result, out } = await run(["\x1b[C", "\x04"], { test: { keys: ["\x1b[C", "\x04"], confirm: "YES" } }, lanes);
+      expect(result).toBeNull();
+      expect(plain(out)).toContain(`Error: Safety check failed: ${outside} is not inside ${root}`);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("Esc in the lane view cancels the picker", async () => {
+    const { result, out } = await run(["\x1b[C", "\x1b", "\r"]);
+    expect(result).toBeNull();
+    expect(allFrames(out)).toHaveLength(2);
+  });
+
+  test("→ without lanes: hint when the workspace has no lanes yet, nothing for other folders", async () => {
+    const empty = await run(["\x1b[C"], {}, () => []);
+    expect(frames(empty.out)[1]).toContain("\nno lanes — work add <repo>\n");
+    const plainFolder = await pick({ ...base(), scope: "labs", test: { keys: ["\x1b[C"] } });
+    expect(frames(plainFolder.out)[1]).toContain("↑↓ Enter  → Lanes");
+    expect(frames(plainFolder.out)[1]).toBe(frames(plainFolder.out)[0]);
+  });
+
+  test("lanes load once; lane dirty checks add * and survive ← / →", async () => {
+    let loads = 0;
+    let checks = 0;
+    const lanes = [lane("root", null, ["app"], { dirty: async () => (checks++, true) })];
+    const { out } = await run(["\x1b[C", "\x1b[D", "\x1b[C", "\x1b[B"], {}, () => (loads++, lanes));
+    expect(loads).toBe(1);
+    expect(checks).toBe(1);
+    expect(listOf(allFrames(out).at(-1)!)).toEqual(["→ 📁 root  IMG-1234-autofit  on main  app  *"]);
+  });
+
+  test("long rows drop trailing parts", async () => {
+    process.env.WORK_WIDTH = "40";
+    try {
+      const { out } = await run(["\x1b[C"]);
+      const list = listOf(allFrames(out).at(-1)!);
+      expect(list[0]).toBe("→ 📁 root   IMG-1234-autofit");
+      for (const line of list) expect(Array.from(line).length + 1).toBeLessThanOrEqual(39);
+    } finally {
+      process.env.WORK_WIDTH = "80";
+    }
+  });
+});
+
+describe("preselect", () => {
+  test("the cursor starts on selectedPath", async () => {
+    const other = byName("IMG-99-labs-thing");
+    const { out } = await pick({ ...base(), scope: "labs", selectedPath: other.path, test: { renderOnce: true } });
+    expect(plain(out)).toContain("→ 📁 IMG-99-labs-thing");
+    const { result } = await pick({ ...base(), scope: "*", selectedPath: other.path, test: { keys: ["\r"] } });
+    expect(result).toEqual({ type: "cd", path: other.path });
+  });
+
+  test("not with a query, and not when the workspace isn't listed", async () => {
+    const other = byName("IMG-99-labs-thing");
+    const q = await pick({ ...base(), scope: "labs", query: "img", selectedPath: other.path, test: { renderOnce: true } });
+    expect(plain(q.out)).toContain("→ 📁 IMG-1234-autofit");
+    const elsewhere = await pick({ ...base(), scope: "tries", selectedPath: other.path, test: { renderOnce: true } });
+    expect(plain(elsewhere.out)).toContain("→ 📁 2026-09-18-redis-bench");
   });
 });
 

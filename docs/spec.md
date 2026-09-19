@@ -108,11 +108,24 @@ relative time + score column, `📁`/`🗑️` icons, date part dimmed.
 
 Extensions: header is a space bar (`all  tries  labs  + new`, active one highlighted); Tab / Shift-Tab cycle
 all → each space → `+ new` (name → choose date/no-date default → space created, picker switches to it); compact
-footer that fits 80 columns. Two create rows per target space: the space's default prefix first (Ctrl-T), the other
-variant (date ↔ no date) second. Query `space/rest` filters that space and creates there; an unknown space is
-created after asking its default prefix (written to `.space.toml`). Rows show `space/` prefix in all-scope; badges
-(lane count, repo names, `*` dirty — dirty computed asynchronously and redrawn, `stale` when older than the space's
-`cleanup_days`); Ctrl-R rename/move (prompt `space/name`). Recency = last visit from history, else mtime.
+footer that fits 80 columns. Start tab: `--space` (shortcuts), else the space the cwd is in, else all; with an empty
+query the cursor starts on the workspace the cwd is in. Create rows: in a space tab two rows, the space's default
+prefix first (Ctrl-T), the other variant (date ↔ no date) second; in all-scope one row per existing space with its
+default prefix, the default space first (Ctrl-T), then the others alphabetically (the blank line before the create
+rows is dropped while the list scrolls, so a full frame never exceeds the terminal height). Query `space/rest`
+filters that space and creates there; an unknown space is created after asking its default prefix (written to
+`.space.toml`). Rows show `space/` prefix in all-scope; badges (lane count, repo names, `*` dirty — dirty computed
+asynchronously and redrawn, `stale` when older than the space's `cleanup_days`); Ctrl-R rename/move (prompt
+`space/name`). Recency = last visit from history, else mtime.
+
+Lane view (try ignores ←/→, so try parity holds): → on a workspace with lanes shows them (parents first) under a
+breadcrumb `📁 work › space › workspace`: name, branch, `on <parent|main>`, repos, async `*` dirty; typing filters
+them. Enter cds into the lane (history records the workspace). A valid new name (`^[A-Za-z0-9][A-Za-z0-9._-]*$`,
+whitespace → `-`) adds `📂 New lane on <lane>: <name>` on the last highlighted lane; Enter / Ctrl-T returns it and the
+CLI runs `createLane` (inherits the parent's repos) after the picker closed, then cds into it. Ctrl-D on a lane: YES
+screen with `removalWarnings(lane path)`, then the CLI runs `removeLane`. ← returns to the list with the query
+restored and the cursor on the workspace; Esc cancels the picker. → on a workspace without lanes shows
+`no lanes — work add <repo>`.
 
 ## Repos
 
