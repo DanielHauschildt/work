@@ -302,6 +302,25 @@ describe("new space from a create row", () => {
 });
 
 describe("space/rest queries", () => {
+  test("space part matching an existing space ignoring case resolves to it", async () => {
+    const calls: string[] = [];
+    const { result, out } = await pick({
+      ...base(),
+      scope: "tries",
+      createOptions: (space) => [{ prefix: space === "labs" ? "IMG-7-" : "x-", label: "" }],
+      addSpace: (name) => {
+        calls.push(name);
+      },
+      test: { keys: [..."LABS/auto", "\x1b[B", "\r"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "labs", name: "IMG-7-auto" });
+    expect(calls).toEqual([]);
+    const last = frames(out).at(-1)!;
+    expect(last).toContain("📁 labs/IMG-1234-autofit");
+    expect(last).toContain("→ 📂 New labs/IMG-7-auto");
+    expect(last).not.toContain("(new space)");
+  });
+
   test("`labs/` lists that space (with prefix) from another scope", async () => {
     const { out } = await pick({ ...base(), scope: "tries", query: "labs/", test: { renderOnce: true } });
     const p = plain(out);
@@ -365,6 +384,41 @@ describe("space/rest queries", () => {
   });
 });
 
+describe("case-insensitive space lookups", () => {
+  test("initial scope and defaultSpace resolve to the existing spelling", async () => {
+    const { out } = await pick({ ...base(), scope: "Labs", test: { renderOnce: true, forceColors: false } });
+    expect(out.split("\n")[0]).toBe("📁 work   all [labs] tries  + new ");
+    expect(plain(out)).toContain("📁 IMG-1234-autofit");
+
+    const calls: string[] = [];
+    const { result } = await pick({
+      ...base(),
+      scope: "*",
+      defaultSpace: "TRIES",
+      addSpace: (name) => {
+        calls.push(name);
+      },
+      test: { keys: [..."zzz", "\r"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}zzz` });
+    expect(calls).toEqual([]);
+  });
+
+  test("whitespace-normalized space part matches too", async () => {
+    const { out } = await pick({
+      ...base(),
+      scopes: ["*", "My-Space", "tries"],
+      items: [...items, item("My-Space", "deep-dive", 3)],
+      scope: "tries",
+      test: { keys: [..."my space/deep"] },
+    });
+    const last = frames(out).at(-1)!;
+    expect(last).toContain("📁 My-Space/deep-dive");
+    expect(last).toContain("📂 New My-Space/");
+    expect(last).not.toContain("(new space)");
+  });
+});
+
 describe("+ new tab", () => {
   function plusNew(keys: string[], extra: Partial<PickerOptions> = {}) {
     const calls: Array<[string, string]> = [];
@@ -417,7 +471,7 @@ describe("+ new tab", () => {
     expect(result).toBeNull();
     const p = plain(out);
     expect(p).toContain('Invalid space name "a/b": use letters, digits, . _ - (not starting with . or -)');
-    expect(p).toContain("Space LABS already exists");
+    expect(p).toContain("Space labs already exists");
     expect(activeTabs(out).at(-1)).toBe("+ new");
   });
 

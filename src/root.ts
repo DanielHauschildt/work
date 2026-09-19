@@ -117,7 +117,8 @@ export class Root {
     const space = spaceName(input);
     this.checkNewSpace(space);
     const dir = this.spacePath(space);
-    if (existsSync(dir)) fail(`space ${space} already exists`);
+    const existing = this.findSpace(space);
+    if (existing !== undefined || existsSync(dir)) fail(`space ${existing ?? space} already exists`);
     mkdirSync(dir, { recursive: true });
     if (prefix !== undefined) this.writeSpaceConfig(space, { prefix });
     return dir;
@@ -129,9 +130,19 @@ export class Root {
     if (error) fail(error);
   }
 
-  /** A space given on the command line: an existing space as typed, else normalized like a new space name. */
+  /** Existing space whose name equals `name` ignoring case (exact match first). */
+  findSpace(name: string): string | undefined {
+    const spaces = this.spaces();
+    return spaces.find((s) => s === name) ?? spaces.find((s) => s.toLowerCase() === name.toLowerCase());
+  }
+
+  /**
+   * A space given on the command line: an existing space (as typed, else normalized; case-insensitive, so the
+   * folder's own name is used), else the normalized name for a new space.
+   */
   spaceArg(input: string): string {
-    return this.spaces().includes(input) ? input : spaceName(input);
+    const name = spaceName(input);
+    return this.findSpace(input) ?? this.findSpace(name) ?? name;
   }
 
   workspaces(space: string): WorkspaceInfo[] {

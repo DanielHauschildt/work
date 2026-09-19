@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { commit, g, GIT_ENV, makeRemote, type Sandbox, sandbox } from "./helpers.ts";
 
@@ -264,6 +264,26 @@ describe("spaces", () => {
     // an existing folder with a space in its name is used as typed
     mkdirSync(join(sb.root, "Old Stuff"));
     expect(work(["new", "--space", "Old Stuff", "c"]).stdout.trim()).toBe(join(sb.root, "Old Stuff", `${TODAY}-c`));
+  });
+
+  test("space names match existing spaces ignoring case; the folder's own name is used", () => {
+    work(["space", "new", "labs"]);
+    mkdirSync(join(sb.root, "Old Stuff"));
+    mkdirSync(join(sb.root, "tries", "w"), { recursive: true });
+    const spaces = () => readdirSync(sb.root).filter((n) => !n.startsWith("."));
+    expect(work(["new", "--space", "LABS", "x"]).stdout.trim()).toBe(join(sb.root, "labs", `${TODAY}-x`));
+    expect(work(["new", "--space", " Labs ", "--json", "y"]).stdout).toContain(`"space":"labs"`);
+    expect(work(["new", "--space", "old stuff", "z"]).stdout.trim()).toBe(join(sb.root, "Old Stuff", `${TODAY}-z`));
+    const set = work(["space", "set", "Labs", "--prefix", "none"]);
+    expect(set.code).toBe(0);
+    expect(set.stderr).toContain("labs: prefix none");
+    expect(readFileSync(join(sb.root, "labs", ".space.toml"), "utf8")).toBe('prefix = ""\n');
+    const mv = work(["mv", "tries/w", "Labs/moved", "--json"]);
+    expect(JSON.parse(mv.stdout).path).toBe(join(sb.root, "labs", "moved"));
+    const dup = work(["space", "new", "Labs"]);
+    expect(dup.code).toBe(1);
+    expect(dup.stderr).toContain("space labs already exists");
+    expect(spaces().sort()).toEqual(["Old Stuff", "labs", "tries"]);
   });
 
   test("space names still invalid after normalizing say why", () => {

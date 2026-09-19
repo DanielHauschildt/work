@@ -162,8 +162,8 @@ class Picker {
     const initial = opts.initialInput !== undefined ? dashify(opts.initialInput) : searchTerm;
     this.input = Array.from(initial);
     this.inputCursorPos = this.input.length;
-    this.scope = opts.scope;
     this.scopes = [...opts.scopes];
+    this.scope = opts.scope === "*" ? "*" : (this.existingSpace(opts.scope) ?? opts.scope);
 
     const test = opts.test ?? {};
     this.testKeys = test.keys ? [...test.keys] : undefined;
@@ -267,14 +267,23 @@ class Picker {
     return space !== "*" && this.scopes.includes(space);
   }
 
-  /** Space named by typed text: an existing space as typed, else normalized like a new space name. */
+  /** The existing space `name` refers to: exact match first, else ignoring case. */
+  private existingSpace(name: string): string | undefined {
+    if (this.spaceExists(name)) return name;
+    const lower = name.toLowerCase();
+    return this.scopes.find((s) => s !== "*" && s.toLowerCase() === lower);
+  }
+
+  /** Space named by typed text: an existing space (ignoring case), else normalized like a new space name. */
   private typedSpace(text: string): string {
-    return this.spaceExists(text) ? text : spaceName(text);
+    const name = spaceName(text);
+    return this.existingSpace(text) ?? this.existingSpace(name) ?? name;
   }
 
   /** Why `name` (normalized) can't become a new space, or undefined. */
   private newSpaceProblem(name: string): string | undefined {
-    if (this.scopes.some((s) => s !== "*" && s.toLowerCase() === name.toLowerCase())) return `Space ${name} already exists`;
+    const existing = this.existingSpace(name);
+    if (existing) return `Space ${existing} already exists`;
     return spaceNameError(name);
   }
 
@@ -294,7 +303,7 @@ class Picker {
     // `space/rest` narrows the list to that space and creates there
     const query = this.query;
     let listSpace: string | null = this.scope === "*" ? null : this.scope;
-    let target = this.scope === "*" ? this.opts.defaultSpace : this.scope;
+    let target = this.scope === "*" ? (this.existingSpace(this.opts.defaultSpace) ?? this.opts.defaultSpace) : this.scope;
     let rest = query;
     const slash = query.indexOf("/");
     const querySpace = slash >= 0 ? this.typedSpace(query.slice(0, slash)) : "";
