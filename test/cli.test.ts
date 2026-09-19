@@ -250,6 +250,49 @@ describe("spaces", () => {
     expect(readFileSync(join(sb.root, "LABS", ".space.toml"), "utf8")).toBe('prefix = "auto"\n');
     expect(existsSync(join(sb.root, "LABS", `${TODAY}-X`))).toBe(true);
   });
+
+  test("space names: whitespace → dashes (trimmed, case kept) for space new/set, --space and mv", () => {
+    const created = work(["space", "new", "  My   space ", "--json"]);
+    expect(created.code).toBe(0);
+    expect(JSON.parse(created.stdout)).toEqual({ space: "My-space", path: join(sb.root, "My-space") });
+    expect(work(["space", "set", "My space", "--prefix", "none"]).code).toBe(0);
+    expect(readFileSync(join(sb.root, "My-space", ".space.toml"), "utf8")).toBe('prefix = ""\n');
+    expect(work(["new", "--space", "My space", "a"]).stdout.trim()).toBe(join(sb.root, "My-space", "a"));
+    expect(work(["new", "--space", "other space", "b"]).stdout.trim()).toBe(join(sb.root, "other-space", `${TODAY}-b`));
+    expect(work(["mv", "My-space/a", "third space"]).code).toBe(0);
+    expect(existsSync(join(sb.root, "third-space", "a"))).toBe(true);
+    // an existing folder with a space in its name is used as typed
+    mkdirSync(join(sb.root, "Old Stuff"));
+    expect(work(["new", "--space", "Old Stuff", "c"]).stdout.trim()).toBe(join(sb.root, "Old Stuff", `${TODAY}-c`));
+  });
+
+  test("space names still invalid after normalizing say why", () => {
+    mkdirSync(join(sb.root, "tries", "w"), { recursive: true });
+    const cases: [string[], string][] = [
+      [["space", "new", "a!b"], "a!b"],
+      [["space", "new", "_x y"], "_x-y"],
+      [["new", "--space", "a!b", "x"], "a!b"],
+      [["mv", "tries/w", "a!b"], "a!b"],
+    ];
+    for (const [args, name] of cases) {
+      const r = work(args);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`Invalid space name "${name}": use letters, digits, . _ - (not starting with . or -)`);
+    }
+    expect(existsSync(join(sb.root, "a!b"))).toBe(false);
+    expect(existsSync(join(sb.root, "tries", "w"))).toBe(true);
+  });
+
+  test("picker: whitespace in a new space name (+ new tab and space/ query)", () => {
+    mkdirSync(join(sb.root, "tries"), { recursive: true });
+    // try's TYPE= token upper-cases: "my space" → "MY SPACE" → MY-SPACE
+    const tab = work(["exec", "--and-keys", "TAB,TAB,TYPE=my space,ENTER,ENTER,TYPE=x,CTRL-T"]);
+    expect(tab.code).toBe(0);
+    expect(existsSync(join(sb.root, "MY-SPACE", `${TODAY}-X`))).toBe(true);
+    const query = work(["exec", "--and-keys", "TYPE=new space/acme,ENTER,ENTER"]);
+    expect(query.code).toBe(0);
+    expect(existsSync(join(sb.root, "NEW-SPACE", `${TODAY}-ACME`))).toBe(true);
+  });
 });
 
 describe("shell integration", () => {

@@ -2,8 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fail } from "./errors.ts";
-
-export const SPACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+import { spaceName, spaceNameError } from "./naming.ts";
 
 export interface SpaceConfig {
   prefix?: string;
@@ -102,7 +101,7 @@ export class Root {
   /** Merge `patch` into `<space>/.space.toml` (flat keys only), creating the space if needed. */
   writeSpaceConfig(space: string, patch: SpaceConfig): void {
     const dir = this.spacePath(space);
-    if (!SPACE_NAME.test(space)) fail(`invalid space name: ${space}`);
+    if (!isDir(dir)) this.checkNewSpace(space);
     mkdirSync(dir, { recursive: true });
     this.configs.delete(space);
     const merged: Record<string, unknown> = { ...this.spaceConfig(space), ...patch };
@@ -113,14 +112,26 @@ export class Root {
     this.configs.delete(space);
   }
 
-  /** Create a space folder (optionally with a default prefix). */
-  addSpace(space: string, prefix?: string): string {
-    if (!SPACE_NAME.test(space)) fail(`invalid space name: ${space}`);
+  /** Create a space folder (optionally with a default prefix); the name is normalized with `spaceName`. */
+  addSpace(input: string, prefix?: string): string {
+    const space = spaceName(input);
+    this.checkNewSpace(space);
     const dir = this.spacePath(space);
     if (existsSync(dir)) fail(`space ${space} already exists`);
     mkdirSync(dir, { recursive: true });
     if (prefix !== undefined) this.writeSpaceConfig(space, { prefix });
     return dir;
+  }
+
+  /** Fail with the reason when `space` can't be created. */
+  checkNewSpace(space: string): void {
+    const error = spaceNameError(space);
+    if (error) fail(error);
+  }
+
+  /** A space given on the command line: an existing space as typed, else normalized like a new space name. */
+  spaceArg(input: string): string {
+    return this.spaces().includes(input) ? input : spaceName(input);
   }
 
   workspaces(space: string): WorkspaceInfo[] {

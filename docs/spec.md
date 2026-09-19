@@ -39,6 +39,9 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
 
 - Workspace name = `<prefix>-<name>`; prefix `auto` = today `YYYY-MM-DD`, `""` = none, else literal (`IMG-1234`).
   Whitespace in names → `-`.
+- New space names are normalized the same way (trimmed, whitespace → `-`, case kept) in the picker (`+ new`,
+  `space/rest`), `work space new`, `--space` and `mv` targets, then must match `[A-Za-z0-9][A-Za-z0-9._-]*`;
+  an existing folder is used as typed.
 - Branch = workspace name without a leading date prefix; lane `root` uses it as is, other lanes append `-<lane>`.
   (`-` not `/`: git can't hold `x` and `x/ui` at once.)
 - Workspaces without `.work.json` are plain folders (all existing tries). A `.git` at a workspace root (legacy

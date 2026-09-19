@@ -19,6 +19,7 @@ export function spacePrefix(root: Root, space: string, flag: string | undefined)
 /** Create (or reuse) `<space>/<name>`; copies the space template into new workspaces. */
 export function createWorkspace(root: Root, space: string, name: string): { path: string; created: boolean } {
   const spaceDir = root.spacePath(space);
+  if (!existsSync(spaceDir)) root.checkNewSpace(space);
   const clean = dashify(name);
   if (!clean || clean.includes("/") || clean.startsWith(".")) fail(`invalid workspace name: ${name}`);
   const path = join(spaceDir, clean);
@@ -90,8 +91,10 @@ export interface MoveTarget {
 
 /** Parse `space[/name]`; the name defaults to the workspace name (with a new prefix when --prefix is given). */
 export function parseMoveTarget(root: Root, workspace: WorkspaceInfo, target: string, prefixFlag: string | undefined): MoveTarget {
-  const [space, ...rest] = target.split("/");
-  if (!space) fail("target space missing");
+  const [typed = "", ...rest] = target.split("/");
+  if (!typed.trim()) fail("target space missing");
+  const space = root.spaceArg(typed);
+  if (!root.spaces().includes(space)) root.checkNewSpace(space);
   const explicit = rest.join("/");
   let name = explicit || workspace.name;
   if (prefixFlag !== undefined) name = `${prefixText(prefixFlag)}${explicit || stripDate(workspace.name)}`;

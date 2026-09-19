@@ -2,6 +2,7 @@
 
 import { realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
+import { spaceName, spaceNameError } from "../naming.ts";
 import { calculateScore, dashify, formatRelativeTime, formatScore } from "./format.ts";
 import { type InputStream, TerminalInput } from "./input.ts";
 import { UI, type UIOutput } from "./ui.ts";
@@ -90,7 +91,6 @@ interface View {
 
 /** Pseudo scope for the "+ new" tab. Contains a space, so it can never be a space name. */
 const NEW_TAB = "+ new";
-const SPACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const DATE_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 const PRINTABLE = /^[a-zA-Z0-9\-_. /]$/;
 const ALNUM = /[a-zA-Z0-9]/;
@@ -267,6 +267,17 @@ class Picker {
     return space !== "*" && this.scopes.includes(space);
   }
 
+  /** Space named by typed text: an existing space as typed, else normalized like a new space name. */
+  private typedSpace(text: string): string {
+    return this.spaceExists(text) ? text : spaceName(text);
+  }
+
+  /** Why `name` (normalized) can't become a new space, or undefined. */
+  private newSpaceProblem(name: string): string | undefined {
+    if (this.scopes.some((s) => s !== "*" && s.toLowerCase() === name.toLowerCase())) return `Space ${name} already exists`;
+    return spaceNameError(name);
+  }
+
   private createOptions(space: string): CreateOption[] {
     let options = this.createOptionsCache.get(space);
     if (!options) {
@@ -286,9 +297,10 @@ class Picker {
     let target = this.scope === "*" ? this.opts.defaultSpace : this.scope;
     let rest = query;
     const slash = query.indexOf("/");
-    if (slash >= 0 && SPACE_NAME.test(query.slice(0, slash))) {
-      listSpace = query.slice(0, slash);
-      target = listSpace;
+    const querySpace = slash >= 0 ? this.typedSpace(query.slice(0, slash)) : "";
+    if (slash >= 0 && (this.spaceExists(querySpace) || !spaceNameError(querySpace))) {
+      listSpace = querySpace;
+      target = querySpace;
       rest = query.slice(slash + 1);
     }
 
@@ -568,7 +580,7 @@ class Picker {
 
     const visibleEnd = Math.min(this.scrollOffset + maxVisible, totalItems);
 
-    if (this.scope === NEW_TAB) ui.puts("  {dim}Type a name, Enter to create · Tab to leave{/fg}");
+    if (this.scope === NEW_TAB) ui.puts(`  {dim}${this.newSpaceHint()}{/fg}`);
 
     for (let idx = this.scrollOffset; idx < visibleEnd; idx++) {
       // Add blank line before the create rows
@@ -787,16 +799,20 @@ class Picker {
     return { type: "mkdir", space, name: dashify(`${option.prefix}${rest}`) };
   }
 
+  /** "+ new" tab hint: what Enter would create (the normalized name), or why it can't. */
+  private newSpaceHint(): string {
+    const name = spaceName(this.query);
+    if (name === "") return "Type a name, Enter to create · Tab to leave";
+    return this.newSpaceProblem(name) ?? `Enter creates ${name} · Tab to leave`;
+  }
+
   /** "+ new" tab: Enter / Ctrl-T creates the typed space and switches to it. */
   private async handleNewSpace(): Promise<void> {
-    const name = this.query;
+    const name = spaceName(this.query);
     if (name === "") return;
-    if (!SPACE_NAME.test(name)) {
-      this.status = `Invalid space name: ${name}`;
-      return;
-    }
-    if (this.scopes.some((s) => s !== "*" && s.toLowerCase() === name.toLowerCase())) {
-      this.status = `Space ${name} already exists`;
+    const problem = this.newSpaceProblem(name);
+    if (problem) {
+      this.status = problem;
       return;
     }
     const variant = await this.chooseSpaceDefault(name, "auto");

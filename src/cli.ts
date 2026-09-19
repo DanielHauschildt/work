@@ -29,7 +29,7 @@ import {
   removeTree,
 } from "./lanes.ts";
 import { hasModel, loadModel, repoBranch, topoLanes } from "./model.ts";
-import { cloneDirName, dashify, isGitUri, today, versionedBase } from "./naming.ts";
+import { cloneDirName, dashify, isGitUri, spaceName, today, versionedBase } from "./naming.ts";
 import { expandHome, isInside, Root, type WorkspaceInfo } from "./root.ts";
 import { parentRefOf, submit, sync } from "./stack.ts";
 import { type CreateOption, formatRelativeTime, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
@@ -265,17 +265,19 @@ function cmdSpace(ctx: Ctx, args: string[]): number {
     }
     case "new": {
       if (!name) fail("usage: work space new <name> [--prefix auto|none|TEXT]");
-      const dir = ctx.root.addSpace(name, ctx.prefix === undefined ? undefined : prefixSetting(ctx.prefix));
-      if (ctx.json) out(JSON.stringify({ space: name, path: dir }));
-      else info(`Created space ${name}`);
+      const space = spaceName(name);
+      const dir = ctx.root.addSpace(space, ctx.prefix === undefined ? undefined : prefixSetting(ctx.prefix));
+      if (ctx.json) out(JSON.stringify({ space, path: dir }));
+      else info(`Created space ${space}`);
       ctx.emit.cd(dir);
       return 0;
     }
     case "set": {
       if (!name || ctx.prefix === undefined) fail("usage: work space set <name> --prefix auto|none|TEXT");
-      if (!ctx.root.spaces().includes(name)) fail(`no such space: ${name}`);
-      ctx.root.writeSpaceConfig(name, { prefix: prefixSetting(ctx.prefix) });
-      info(`${name}: prefix ${ctx.prefix}`);
+      const space = ctx.root.spaceArg(name);
+      if (!ctx.root.spaces().includes(space)) fail(`no such space: ${space}`);
+      ctx.root.writeSpaceConfig(space, { prefix: prefixSetting(ctx.prefix) });
+      info(`${space}: prefix ${ctx.prefix}`);
       return 0;
     }
     default:
@@ -631,12 +633,14 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const pathFlag = takeOption(args, "--path");
+  const root = Root.resolve(pathFlag);
+  const spaceFlag = takeOption(args, "--space")?.trim();
   const ctx: Ctx = {
-    root: Root.resolve(pathFlag),
+    root,
     history: undefined as unknown as History,
     emit: undefined as unknown as Emitter,
     cwd: process.cwd(),
-    space: takeOption(args, "--space") || undefined,
+    space: spaceFlag ? root.spaceArg(spaceFlag) : undefined,
     prefix: takeOption(args, "--prefix"),
     lane: takeOption(args, "--lane"),
     on: takeOption(args, "--on"),

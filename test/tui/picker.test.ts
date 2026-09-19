@@ -343,6 +343,21 @@ describe("space/rest queries", () => {
     expect(frames(out).at(-1)).toMatch(/→ 📂 New docs\/\S+guide +\(new space\)/);
   });
 
+  test("whitespace in the space part becomes dashes: `my space/x` targets my-space", async () => {
+    const calls: string[] = [];
+    const { result, out } = await pick({
+      ...base(),
+      scope: "tries",
+      addSpace: (name) => {
+        calls.push(name);
+      },
+      test: { keys: [..."my space/guide", "\r", "\r"] },
+    });
+    expect(result).toEqual({ type: "mkdir", space: "my-space", name: `${DATE}guide` });
+    expect(calls).toEqual(["my-space"]);
+    expect(frames(out).at(-1)).toMatch(/→ 📂 New my-space\/\S+guide +\(new space\)/);
+  });
+
   test("not a space name before the slash: plain query, no create rows", async () => {
     const { out } = await pick({ ...base(), scope: "tries", query: "-x/y", test: { renderOnce: true } });
     expect(plain(out)).toContain("Search: -x/y");
@@ -401,8 +416,31 @@ describe("+ new tab", () => {
     expect(calls).toEqual([]);
     expect(result).toBeNull();
     const p = plain(out);
-    expect(p).toContain("Invalid space name: a/b");
+    expect(p).toContain('Invalid space name "a/b": use letters, digits, . _ - (not starting with . or -)');
     expect(p).toContain("Space LABS already exists");
+    expect(activeTabs(out).at(-1)).toBe("+ new");
+  });
+
+  test("whitespace in the name becomes dashes (trimmed, case kept); the hint shows the result", async () => {
+    const { calls, run } = plusNew([..."  My   space ", "\r", "\r"]);
+    const { out } = await run;
+    expect(calls).toEqual([["My-space", "auto"]]);
+    expect(activeTabs(out).at(-1)).toBe("My-space");
+    const typing = frames(out).filter((f) => f.includes("[+ new]"));
+    expect(typing.at(-1)).toContain("\n  Enter creates My-space · Tab to leave\n");
+    expect(typing[1]).toContain("\n  Type a name, Enter to create · Tab to leave\n"); // only spaces typed so far
+    expect(plain(out)).toContain('New space "My-space" — default for new workspaces:');
+  });
+
+  test("a name that stays invalid after normalizing: hint and Enter say why", async () => {
+    const { calls, run } = plusNew([..."-x", "\r", "\x1b[D"]);
+    const { out } = await run;
+    expect(calls).toEqual([]);
+    const why = 'Invalid space name "-x": use letters, digits, . _ - (not starting with . or -)';
+    const f = frames(out);
+    expect(f.at(-3)).toContain(`\n  ${why}\n`); // hint while typing
+    expect(f.at(-3)).not.toContain(`\n${why}\n`);
+    expect(f.at(-2)).toContain(`\n${why}\n`); // status line after Enter
     expect(activeTabs(out).at(-1)).toBe("+ new");
   });
 

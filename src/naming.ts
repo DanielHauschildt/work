@@ -17,6 +17,19 @@ export function dashify(name: string): string {
   return name.replace(/\s+/g, "-");
 }
 
+/** Names a new space may have: letters, digits, `.`, `_`, `-`; not starting with `.` or `-`. */
+export const SPACE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Space names follow workspace naming: trimmed, whitespace runs → "-", case kept. */
+export function spaceName(input: string): string {
+  return dashify(input.trim());
+}
+
+/** Why `name` can't be a new space, or undefined when it can. */
+export function spaceNameError(name: string): string | undefined {
+  return SPACE_NAME.test(name) ? undefined : `Invalid space name "${name}": use letters, digits, . _ - (not starting with . or -)`;
+}
+
 /**
  * Prefix setting → literal text placed before a name.
  * `auto` = today's date, `""`/`none` = nothing, anything else is used verbatim.
