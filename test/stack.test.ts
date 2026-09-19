@@ -9,7 +9,7 @@ import { advanceRemote, commit, g, makeRemote, type Sandbox, sandbox } from "./h
 
 let sb: Sandbox;
 let root: Root;
-let entry: string;
+let workspace: string;
 let app: string;
 let ghLog: string;
 let ghState: string;
@@ -46,8 +46,8 @@ esac
 beforeEach(() => {
   sb = sandbox();
   root = new Root(sb.root);
-  entry = join(sb.root, "labs", "feat");
-  mkdirSync(entry, { recursive: true });
+  workspace = join(sb.root, "labs", "feat");
+  mkdirSync(workspace, { recursive: true });
   app = makeRemote(sb, "app", { "a.txt": "1\n2\n3\n" });
   // make https://github.com/acme/app.git resolve to the local bare repo
   const gitconfig = join(sb.dir, "gitconfig");
@@ -61,10 +61,10 @@ afterEach(() => {
 });
 
 function setup(): { r: string; ui: string } {
-  const r = addRepo(root, entry, { lane: "root", spec: "https://github.com/acme/app.git", cwd: sb.dir });
+  const r = addRepo(root, workspace, { lane: "root", spec: "https://github.com/acme/app.git", cwd: sb.dir });
   commit(r, "core.txt", "core v1");
-  createLane(root, entry, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
-  const ui = join(entry, "ui", "app");
+  createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
+  const ui = join(workspace, "ui", "app");
   commit(ui, "ui.txt", "ui v1");
   return { r, ui };
 }
@@ -73,17 +73,17 @@ describe("sync", () => {
   test("child lane is restacked after the parent lane gets new commits", () => {
     const { r, ui } = setup();
     const newTip = commit(r, "core2.txt", "core v2");
-    const reports = sync(root, entry);
+    const reports = sync(root, workspace);
     expect(reports.find((x) => x.lane === "ui")!.result).toBe("rebased");
     expect(g(ui, "merge-base", "--is-ancestor", newTip, "HEAD")).toBe("");
     expect(g(ui, "log", "--format=%s", "-3").split("\n")).toEqual(["edit ui.txt", "edit core2.txt", "edit core.txt"]);
-    expect(loadModel(entry).lanes.ui!.repos.app!.base).toBe(newTip);
+    expect(loadModel(workspace).lanes.ui!.repos.app!.base).toBe(newTip);
   });
 
   test("root lane is restacked onto upstream trunk and children follow", () => {
     const { ui } = setup();
     advanceRemote(sb, app, "up.txt", "upstream");
-    const reports = sync(root, entry);
+    const reports = sync(root, workspace);
     expect(reports.map((x) => `${x.lane}:${x.result}`)).toEqual(["root:rebased", "ui:rebased"]);
     expect(existsSync(join(ui, "up.txt"))).toBe(true);
     expect(g(ui, "log", "--format=%s", "-4").split("\n")).toEqual(["edit ui.txt", "edit core.txt", "upstream up.txt", "init"]);
@@ -91,15 +91,15 @@ describe("sync", () => {
 
   test("up-to-date lanes are left alone", () => {
     setup();
-    const reports = sync(root, entry);
+    const reports = sync(root, workspace);
     expect(reports.map((x) => x.result)).toEqual(["up-to-date", "up-to-date"]);
   });
 
-  test("dirty checkouts are skipped", () => {
+  test("dirty worktrees are skipped", () => {
     const { r, ui } = setup();
     commit(r, "core2.txt", "v2");
     writeFileSync(join(ui, "wip.txt"), "wip");
-    const reports = sync(root, entry);
+    const reports = sync(root, workspace);
     expect(reports.find((x) => x.lane === "ui")).toMatchObject({ result: "skipped", detail: "uncommitted changes" });
   });
 
@@ -107,32 +107,32 @@ describe("sync", () => {
     const { r, ui } = setup();
     commit(ui, "a.txt", "1\nUI\n3\n");
     commit(r, "a.txt", "1\nCORE\n3\n");
-    expect(() => sync(root, entry)).toThrow(/conflict while rebasing ui\/app/);
-    expect(loadModel(entry).sync!.pending[0]).toEqual(["ui", "app"]);
-    expect(() => sync(root, entry)).toThrow(/sync is in progress/);
-    expect(() => sync(root, entry, { continue: true })).toThrow(/conflicts remain/);
+    expect(() => sync(root, workspace)).toThrow(/conflict while rebasing ui\/app/);
+    expect(loadModel(workspace).sync!.pending[0]).toEqual(["ui", "app"]);
+    expect(() => sync(root, workspace)).toThrow(/sync is in progress/);
+    expect(() => sync(root, workspace, { continue: true })).toThrow(/conflicts remain/);
     writeFileSync(join(ui, "a.txt"), "1\nCORE+UI\n3\n");
     g(ui, "add", "a.txt");
-    sync(root, entry, { continue: true });
-    expect(loadModel(entry).sync).toBeNull();
+    sync(root, workspace, { continue: true });
+    expect(loadModel(workspace).sync).toBeNull();
     expect(readFileSync(join(ui, "a.txt"), "utf8")).toBe("1\nCORE+UI\n3\n");
     expect(g(ui, "status", "--porcelain")).toBe("");
   });
 
-  test("--abort restores the checkout", () => {
+  test("--abort restores the worktree", () => {
     const { r, ui } = setup();
     const before = commit(ui, "a.txt", "1\nUI\n3\n");
     commit(r, "a.txt", "1\nCORE\n3\n");
-    expect(() => sync(root, entry)).toThrow();
-    sync(root, entry, { abort: true });
+    expect(() => sync(root, workspace)).toThrow();
+    sync(root, workspace, { abort: true });
     expect(g(ui, "rev-parse", "HEAD")).toBe(before);
-    expect(loadModel(entry).sync).toBeNull();
+    expect(loadModel(workspace).sync).toBeNull();
   });
 
   test("squash-merged parent: child moves onto trunk without the parent's commits", () => {
     const { ui } = setup();
-    submit(root, entry);
-    const model = loadModel(entry);
+    submit(root, workspace);
+    const model = loadModel(workspace);
     const rootPr = model.lanes.root!.repos.app!.pr!;
     // simulate a squash merge of the root PR on GitHub
     const tmp = join(sb.dir, "squash");
@@ -142,10 +142,10 @@ describe("sync", () => {
     g(tmp, "commit", "-q", "-m", "squash: core (#1)");
     g(tmp, "push", "-q", "origin", "HEAD:main");
     writeFileSync(join(ghState, `${rootPr}.state`), "MERGED");
-    const reports = sync(root, entry);
+    const reports = sync(root, workspace);
     expect(reports.find((x) => x.lane === "ui")!.result).toBe("rebased");
     expect(g(ui, "log", "--format=%s", "-3").split("\n")).toEqual(["edit ui.txt", "squash: core (#1)", "init"]);
-    const after = loadModel(entry);
+    const after = loadModel(workspace);
     expect(after.lanes.root!.repos.app!.merged).toBe(true);
     expect(after.lanes.ui!.parent).toBeNull();
   });
@@ -154,7 +154,7 @@ describe("sync", () => {
 describe("submit", () => {
   test("pushes lanes and opens stacked PRs with the parent branch as base", () => {
     setup();
-    const reports = submit(root, entry, { draft: true });
+    const reports = submit(root, workspace, { draft: true });
     expect(reports.map((x) => `${x.lane}:${x.result}:${x.pr}`)).toEqual(["root:created:1", "ui:created:2"]);
     const log = readFileSync(ghLog, "utf8");
     expect(log).toContain("pr create -R acme/app --head feat --base main");
@@ -166,18 +166,18 @@ describe("submit", () => {
 
   test("resubmit retargets a PR whose parent was merged", () => {
     setup();
-    submit(root, entry);
+    submit(root, workspace);
     writeFileSync(join(ghState, "1.state"), "MERGED");
     advanceRemote(sb, app, "core.txt", "core v1");
-    sync(root, entry);
-    const reports = submit(root, entry);
+    sync(root, workspace);
+    const reports = submit(root, workspace);
     expect(reports.find((x) => x.lane === "ui")).toMatchObject({ result: "updated", detail: "base → main", pr: 2 });
     expect(readFileSync(join(ghState, "2.base"), "utf8").trim()).toBe("main");
   });
 
   test("lanes without commits over their parent are skipped", () => {
-    addRepo(root, entry, { lane: "root", spec: "https://github.com/acme/app.git", cwd: sb.dir });
-    const reports = submit(root, entry);
+    addRepo(root, workspace, { lane: "root", spec: "https://github.com/acme/app.git", cwd: sb.dir });
+    const reports = submit(root, workspace);
     expect(reports[0]!.result).toBe("no-commits");
   });
 });

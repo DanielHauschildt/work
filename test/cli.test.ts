@@ -86,14 +86,14 @@ describe("basics", () => {
     expect(work(["path", "nope"]).code).toBe(1);
   });
 
-  test("ls --json lists entries across spaces", () => {
+  test("ls --json lists workspaces across spaces", () => {
     work(["new", "a"]);
     work(["new", "--space", "labs", "b"]);
     const list = JSON.parse(work(["ls", "--json"]).stdout) as { space: string; name: string }[];
     expect(list.map((e) => `${e.space}/${e.name}`).sort()).toEqual([`labs/${TODAY}-b`, `tries/${TODAY}-a`]);
   });
 
-  test("back goes to the previous entry", () => {
+  test("back goes to the previous workspace", () => {
     const a = work(["new", "a"]).stdout.trim();
     const b = work(["new", "b"]).stdout.trim();
     expect(work(["back"], { cwd: b }).stdout.trim()).toBe(a);
@@ -102,13 +102,13 @@ describe("basics", () => {
 });
 
 describe("repos", () => {
-  test("clone URL (and URL shorthand) → entry named like try, checkout in root lane", () => {
+  test("clone URL (and URL shorthand) → workspace named like try, worktree in root lane", () => {
     const app = makeRemote(sb, "app");
     const r = work(["clone", app], { wrapper: true });
     expect(r.code).toBe(0);
-    const entry = join(sb.root, "tries", `${TODAY}-remotes-app`);
-    expect(r.emitted).toBe(`cd '${join(entry, "root", "app")}'\n`);
-    expect(g(join(entry, "root", "app"), "branch", "--show-current")).toBe("remotes-app");
+    const workspace = join(sb.root, "tries", `${TODAY}-remotes-app`);
+    expect(r.emitted).toBe(`cd '${join(workspace, "root", "app")}'\n`);
+    expect(g(join(workspace, "root", "app"), "branch", "--show-current")).toBe("remotes-app");
     const r2 = work([app, "custom"]);
     expect(r2.stdout.trim()).toBe(join(sb.root, "tries", "custom", "root", "app"));
   });
@@ -120,9 +120,9 @@ describe("repos", () => {
     expect(bare.code).toBe(1);
     expect(bare.stderr).toContain("'work .' requires a name argument");
     const r = work([".", "exp"], { cwd: repo });
-    const checkout = join(sb.root, "tries", `${TODAY}-exp`, "root", "seed-app");
-    expect(r.stdout.trim()).toBe(checkout);
-    expect(g(checkout, "branch", "--show-current")).toBe("exp");
+    const worktree = join(sb.root, "tries", `${TODAY}-exp`, "root", "seed-app");
+    expect(r.stdout.trim()).toBe(worktree);
+    expect(g(worktree, "branch", "--show-current")).toBe("exp");
     // second time: versioned name like try
     expect(work([".", "exp"], { cwd: repo }).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-exp-2`, "root", "seed-app"));
     // outside a repo: just a folder
@@ -130,32 +130,32 @@ describe("repos", () => {
     void app;
   });
 
-  test("add + lane inside an entry, info --json", () => {
+  test("add + lane inside a workspace, info --json", () => {
     const app = makeRemote(sb, "app");
-    const entry = work(["new", "--space", "labs", "--prefix", "IMG-9", "feat"]).stdout.trim();
-    const checkout = work(["add", app], { cwd: entry }).stdout.trim();
-    expect(checkout).toBe(join(entry, "root", "app"));
-    commit(checkout, "x.txt", "x");
-    const lane = work(["lane", "ui"], { cwd: checkout, wrapper: true });
+    const workspace = work(["new", "--space", "labs", "--prefix", "IMG-9", "feat"]).stdout.trim();
+    const worktree = work(["add", app], { cwd: workspace }).stdout.trim();
+    expect(worktree).toBe(join(workspace, "root", "app"));
+    commit(worktree, "x.txt", "x");
+    const lane = work(["lane", "ui"], { cwd: worktree, wrapper: true });
     expect(lane.code).toBe(0);
-    expect(lane.emitted).toBe(`cd '${join(entry, "ui")}'\n`);
-    const infoJson = JSON.parse(work(["info", "--json"], { cwd: join(entry, "ui") }).stdout);
+    expect(lane.emitted).toBe(`cd '${join(workspace, "ui")}'\n`);
+    const infoJson = JSON.parse(work(["info", "--json"], { cwd: join(workspace, "ui") }).stdout);
     expect(infoJson.lanes.map((l: { name: string; parent: string | null; branch: string }) => [l.name, l.parent, l.branch])).toEqual([
       ["root", null, "IMG-9-feat"],
       ["ui", "root", "IMG-9-feat-ui"],
     ]);
     expect(infoJson.lanes[1].repos[0]).toMatchObject({ repo: "app", ahead: 0, behind: 0, dirty: false });
     // lane on trunk explicitly
-    work(["lane", "docs", "--on", "trunk", "app"], { cwd: entry });
-    const again = JSON.parse(work(["info", "--json"], { cwd: entry }).stdout);
+    work(["lane", "docs", "--on", "trunk", "app"], { cwd: workspace });
+    const again = JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout);
     expect(again.lanes.find((l: { name: string }) => l.name === "docs").parent).toBeNull();
-    expect(readFileSync(join(entry, "ui", "AGENTS.md"), "utf8")).toContain("Branch: `IMG-9-feat-ui`");
+    expect(readFileSync(join(workspace, "ui", "AGENTS.md"), "utf8")).toContain("Branch: `IMG-9-feat-ui`");
   });
 
-  test("mv promotes an entry, repairs worktrees and follows the cwd", () => {
+  test("mv promotes a workspace, repairs worktrees and follows the cwd", () => {
     const app = makeRemote(sb, "app");
-    const checkout = work(["clone", app, "exp"]).stdout.trim();
-    const r = work(["mv", "labs", "--prefix", "IMG-7"], { cwd: checkout, wrapper: true });
+    const worktree = work(["clone", app, "exp"]).stdout.trim();
+    const r = work(["mv", "labs", "--prefix", "IMG-7"], { cwd: worktree, wrapper: true });
     expect(r.code).toBe(0);
     const moved = join(sb.root, "labs", "IMG-7-exp", "root", "app");
     expect(r.emitted).toBe(`cd '${moved}'\n`);
@@ -167,20 +167,20 @@ describe("repos", () => {
 
   test("archive / unarchive keep worktrees working", () => {
     const app = makeRemote(sb, "app");
-    const checkout = work(["clone", app, "old"]).stdout.trim();
+    const worktree = work(["clone", app, "old"]).stdout.trim();
     expect(work(["archive", "old"]).code).toBe(0);
     const archived = join(sb.root, "tries", ".archive", "old", "root", "app");
     expect(g(archived, "status", "--porcelain")).toBe("");
     expect(JSON.parse(work(["ls", "--json"]).stdout)).toEqual([]);
     expect(JSON.parse(work(["ls", "--json", "--archived"]).stdout)[0].name).toBe("old");
     expect(work(["unarchive", "old"]).stdout.trim()).toBe(join(sb.root, "tries", "old"));
-    expect(g(checkout, "status", "--porcelain")).toBe("");
+    expect(g(worktree, "status", "--porcelain")).toBe("");
   });
 
   test("rm refuses dirty work, needs --yes without a TTY, prunes worktrees", () => {
     const app = makeRemote(sb, "app");
-    const checkout = work(["clone", app, "gone"]).stdout.trim();
-    writeFileSync(join(checkout, "wip.txt"), "wip");
+    const worktree = work(["clone", app, "gone"]).stdout.trim();
+    writeFileSync(join(worktree, "wip.txt"), "wip");
     const refused = work(["rm", "gone"]);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("uncommitted changes");
@@ -192,14 +192,14 @@ describe("repos", () => {
     expect(g(store, "worktree", "list")).not.toContain("gone");
   });
 
-  test("rm ./lane from inside the entry", () => {
+  test("rm ./lane from inside the workspace", () => {
     const app = makeRemote(sb, "app");
-    const entry = work(["new", "e"]).stdout.trim();
-    work(["add", app], { cwd: entry });
-    work(["lane", "ui"], { cwd: join(entry, "root") });
-    expect(work(["rm", "./ui", "--yes"], { cwd: entry }).code).toBe(0);
-    expect(existsSync(join(entry, "ui"))).toBe(false);
-    expect(JSON.parse(work(["info", "--json"], { cwd: entry }).stdout).lanes.map((l: { name: string }) => l.name)).toEqual(["root"]);
+    const workspace = work(["new", "e"]).stdout.trim();
+    work(["add", app], { cwd: workspace });
+    work(["lane", "ui"], { cwd: join(workspace, "root") });
+    expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).code).toBe(0);
+    expect(existsSync(join(workspace, "ui"))).toBe(false);
+    expect(JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout).lanes.map((l: { name: string }) => l.name)).toEqual(["root"]);
   });
 });
 
@@ -223,7 +223,7 @@ describe("spaces", () => {
     expect(work(["new", "--space", "clients", "acme"]).stdout.trim()).toBe(join(sb.root, "clients", "acme"));
   });
 
-  test("picker: second create row makes an undated entry", () => {
+  test("picker: second create row makes an undated workspace", () => {
     mkdirSync(join(sb.root, "tries"), { recursive: true });
     const r = work(["exec", "--space", "tries", "--and-keys", "TYPE=idea,DOWN,ENTER"]);
     expect(r.code).toBe(0);
@@ -244,7 +244,7 @@ describe("spaces", () => {
 
   test("picker: + new tab creates a space and stays open in it", () => {
     mkdirSync(join(sb.root, "tries"), { recursive: true });
-    // scopes: all, tries, + new → two Tabs; name; Enter; keep "date"; then create an entry there
+    // scopes: all, tries, + new → two Tabs; name; Enter; keep "date"; then create a workspace there
     const r = work(["exec", "--and-keys", "TAB,TAB,TYPE=labs,ENTER,ENTER,TYPE=x,CTRL-T"]);
     expect(r.code).toBe(0);
     expect(readFileSync(join(sb.root, "LABS", ".space.toml"), "utf8")).toBe('prefix = "auto"\n');
@@ -279,7 +279,7 @@ describe("shell integration", () => {
     });
   }
 
-  test("__complete: subcommands, spaces, entries of a shortcut space, flags", () => {
+  test("__complete: subcommands, spaces, workspaces of a shortcut space, flags", () => {
     mkdirSync(join(sb.root, "tries", "2026-09-01-redis"), { recursive: true });
     mkdirSync(join(sb.root, "labs", "IMG-1-x"), { recursive: true });
     const c = (cmd: string, space: string, ...words: string[]) =>

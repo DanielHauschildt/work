@@ -254,7 +254,7 @@ describe("new space from a create row", () => {
     const p = plain(out);
     expect(p).toMatch(/→ 📂 New ideas\/\d{4}-\d{2}-\d{2}-foo +\(new space\)\n/);
     expect(p).toMatch(/ {2}📂 New ideas\/foo +\(new space\) {2}no date\n/);
-    expect(p).toContain(`New space "ideas" — default for new entries:\n→ date      (${DATE}name)\n  no date   (name)\n↑↓ Enter  Esc Back\n`);
+    expect(p).toContain(`New space "ideas" — default for new workspaces:\n→ date      (${DATE}name)\n  no date   (name)\n↑↓ Enter  Esc Back\n`);
   });
 
   test("preselects no date for a row without prefix; the choice can be changed", async () => {
@@ -263,7 +263,7 @@ describe("new space from a create row", () => {
     expect(plain(out)).toContain("  date      (");
     expect(plain(out)).toContain("→ no date   (name)");
     expect(calls).toEqual([["ideas", "auto"]]);
-    // the entry keeps the prefix of the row that was picked
+    // the workspace keeps the prefix of the row that was picked
     expect(result).toEqual({ type: "mkdir", space: "ideas", name: "foo" });
   });
 

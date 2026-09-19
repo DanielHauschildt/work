@@ -28,10 +28,10 @@ export function tmpRoot(prefix = "work-tui-"): string {
 
 const HOUR = 3_600_000;
 
-/** Create entry folders with mtimes `ageHours` in the past. */
-export function makeEntries(dir: string, entries: Record<string, number>): void {
+/** Create workspace folders with mtimes `ageHours` in the past. */
+export function makeWorkspaces(dir: string, workspaces: Record<string, number>): void {
   const now = Date.now();
-  for (const [name, ageHours] of Object.entries(entries)) {
+  for (const [name, ageHours] of Object.entries(workspaces)) {
     const p = join(dir, name);
     mkdirSync(p, { recursive: true });
     const t = new Date(now - ageHours * HOUR);

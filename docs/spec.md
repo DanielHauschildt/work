@@ -10,12 +10,12 @@ Bun + TypeScript, compiled to a single binary (`bun build --compile`).
 |---|---|---|
 | root | base folder, configurable (`work init <path>`, `--path`, `WORK_ROOT`, default `~/Work`) | `~/Work` |
 | space | any non-hidden folder in root | `tries`, `labs`, `clients` |
-| entry | a folder in a space (try's "try") | `labs/IMG-1234-autofit` |
-| lane | a feature inside an entry: one branch, one agent | `labs/IMG-1234-autofit/ui` |
-| checkout | a git worktree of one repo inside a lane | `labs/IMG-1234-autofit/ui/cesdk-web` |
-| store | shared bare clone backing all checkouts of a repo | `~/Work/.repos/github.com/imgly/cesdk-web.git` |
+| workspace | a folder in a space (try's "try") | `labs/IMG-1234-autofit` |
+| lane | a feature inside a workspace: one branch, one agent | `labs/IMG-1234-autofit/ui` |
+| worktree | one repo inside a lane, as a git worktree of its store | `labs/IMG-1234-autofit/ui/cesdk-web` |
+| store | shared bare clone backing all worktrees of a repo | `~/Work/.repos/github.com/imgly/cesdk-web.git` |
 
-Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/entries.
+Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
 
 ## Layout & naming
 
@@ -26,23 +26,23 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/entries.
 ├── .work/locks/                       lock files
 ├── tries/
 │   ├── .space.toml                    optional space config
-│   ├── .archive/<entry>/              archived entries
+│   ├── .archive/<workspace>/              archived workspaces
 │   └── 2026-09-19-redis-bench/
 │       ├── .work.json                 lanes, parents, bases, PRs (only once a repo was added)
 │       ├── AGENTS.md, CLAUDE.md       generated (phase 2)
-│       └── root/redis/                lane "root", checkout of redis, branch `redis-bench`
+│       └── root/redis/                lane "root", worktree of redis, branch `redis-bench`
 └── labs/IMG-1234-autofit/
     ├── root/cesdk-web/                branch IMG-1234-autofit        on origin/main
     ├── ui/cesdk-web/                  branch IMG-1234-autofit-ui     on root
     └── guide/docs/                    branch IMG-1234-autofit-guide  on root (docs not in root → on origin/main)
 ```
 
-- Entry name = `<prefix>-<name>`; prefix `auto` = today `YYYY-MM-DD`, `""` = none, else literal (`IMG-1234`).
+- Workspace name = `<prefix>-<name>`; prefix `auto` = today `YYYY-MM-DD`, `""` = none, else literal (`IMG-1234`).
   Whitespace in names → `-`.
-- Branch = entry name without a leading date prefix; lane `root` uses it as is, other lanes append `-<lane>`.
+- Branch = workspace name without a leading date prefix; lane `root` uses it as is, other lanes append `-<lane>`.
   (`-` not `/`: git can't hold `x` and `x/ui` at once.)
-- Entries without `.work.json` are plain folders (all existing tries). A `.git` at an entry root (legacy
-  `try clone`) is left alone; the entry is still listed and cd-able.
+- Workspaces without `.work.json` are plain folders (all existing tries). A `.git` at a workspace root (legacy
+  `try clone`) is left alone; the workspace is still listed and cd-able.
 - Lanes are always folders; the first lane defaults to `root`.
 
 ## Shell integration
@@ -71,21 +71,21 @@ for the last (possibly empty) word. `init` registers it for `work` and every sho
 ```
 work [--space S] [query]         picker (all spaces, or S); with --prefix/name creation goes to S (default tries)
 work new [--space S] [--prefix P] <name>    create without picker (agents), prints path / emits cd
-work - | back                    cd to previous entry (history)
-work . <name> | ./path [name]    new entry; if the path is a git repo, a worktree of it in lane root
+work - | back                    cd to previous workspace (history)
+work . <name> | ./path [name]    new workspace; if the path is a git repo, a worktree of it in lane root
 work worktree <dir|path> [name]  try-compat form of the above
-work clone <url> [name] | <url>  new entry `<prefix>-<owner>-<repo>`; store + checkout in lane root
+work clone <url> [name] | <url>  new workspace `<prefix>-<owner>-<repo>`; store + worktree in lane root
 work path <query> [lane]         print absolute path of the unique best match (exit 1 if none/ambiguous)
 work ls [--space S] [--json] [--stale]
 work space [ls | new <name> [--prefix P] | set <name> --prefix P]
-work info [entry] [--json]       lanes, repos, branches, dirty/unpushed, parents, PRs
-work add <repo|url|path> [branch] [--lane L]   add checkout to lane (default: current lane, else root)
+work info [workspace] [--json]   lanes, repos, branches, dirty/unpushed, parents, PRs
+work add <repo|url|path> [branch] [--lane L]   add worktree to lane (default: current lane, else root)
 work lane <name> [repos...] [--on PARENT]      create lane (phase 2)
-work mv <entry> <space>[/<name>] [--prefix P]  move/rename/promote; repairs worktrees; cd follows if inside
-work archive [entry] | unarchive <entry>
-work rm [entry | entry/lane | entry/lane/repo] [--yes] [--force]
+work mv <workspace> <space>[/<name>] [--prefix P]  move/rename/promote; repairs worktrees; cd follows if inside
+work archive [workspace] | unarchive <workspace>
+work rm [workspace | workspace/lane | workspace/lane/repo] [--yes] [--force]
 work sync [--continue | --abort]  restack lanes (phase 3)
-work submit [--draft]             push + PRs per lane checkout (phase 3)
+work submit [--draft]             push + PRs per lane worktree (phase 3)
 work init | exec | __complete | --help | --version
 ```
 
@@ -115,30 +115,30 @@ created after asking its default prefix (written to `.space.toml`). Rows show `s
 
 - Store creation: `git init --bare <store>`; `git remote add origin <url>`;
   `git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`; `git fetch origin`;
-  `git remote set-head origin --auto`. No local branches → any checkout can use any branch.
+  `git remote set-head origin --auto`. No local branches → any worktree can use any branch.
 - Repo spec: URL (https, ssh, file, path ending `.git`) → store; `owner/repo` → `https://github.com/owner/repo.git`;
   bare name → unique store with that basename; path (`.`/`./x`/absolute) to a local repo → worktree from that repo.
-- Checkout: local branch exists → `worktree add <path> <b>`; `origin/<b>` exists → `worktree add --track -b <b>
+- Worktree: local branch exists → `worktree add <path> <b>`; `origin/<b>` exists → `worktree add --track -b <b>
   <path> origin/<b>`; else `worktree add -b <b> <path> <base>` where base = parent lane's branch (if the parent
   lane has this repo, nearest ancestor) else `origin/HEAD`. Record base SHA in `.work.json`.
 - Every store mutation (clone, fetch, worktree add/remove) holds `<root>/.work/locks/<store-hash>.lock`
   (O_EXCL create, JSON `{pid, t}`; stale when pid dead or >10 min; wait with backoff up to 60 s).
-- mv/archive/unarchive: move folder, then `git worktree repair` inside each checkout.
-- rm: per checkout check dirty (`status --porcelain`) and unpushed (`rev-list HEAD --not --remotes`); refuse
+- mv/archive/unarchive: move folder, then `git worktree repair` inside each worktree.
+- rm: per worktree check dirty (`status --porcelain`) and unpushed (`rev-list HEAD --not --remotes`); refuse
   without `--force` (picker shows warnings before YES); `git worktree remove --force`, `worktree prune`, then
   delete folder. Branches are kept.
-- `post_add` (space config) runs `sh -c` in each new checkout; failure = warning.
+- `post_add` (space config) runs `sh -c` in each new worktree; failure = warning.
 
 ## .space.toml
 
 ```toml
 prefix = "auto"            # auto | "" | literal
-template = "template"      # folder inside the space copied into new entries
-post_add = "bun install"   # run in each new checkout
-cleanup_days = 30          # flag entries not visited for N days (picker badge, `ls --stale`)
+template = "template"      # folder inside the space copied into new workspaces
+post_add = "bun install"   # run in each new worktree
+cleanup_days = 30          # flag workspaces not visited for N days (picker badge, `ls --stale`)
 ```
 
-## .work.json (entry)
+## .work.json (workspace)
 
 ```json
 { "version": 1,
@@ -151,7 +151,7 @@ cleanup_days = 30          # flag entries not visited for N days (picker badge, 
 
 ## Agents (phase 2)
 
-Entry and lane get `AGENTS.md` (generated block between `<!-- work:begin -->`/`<!-- work:end -->`, rest is kept)
+Workspace and lane get `AGENTS.md` (generated block between `<!-- work:begin -->`/`<!-- work:end -->`, rest is kept)
 and `CLAUDE.md` containing `@AGENTS.md` (created only if missing). Lane file: your lane, branch, parent, repos,
 sibling lanes are off-limits, use `work sync` / `work submit`. A Claude Code skill lives in `skill/SKILL.md`.
 `--json` on ls/info/path/new, `--yes` replaces typed YES, no prompts without a TTY.
@@ -160,12 +160,12 @@ sibling lanes are off-limits, use `work sync` / `work submit`. A Claude Code ski
 
 - Tree: each lane has one parent (lane or trunk); per repo the effective parent is the nearest ancestor lane
   containing that repo, else `origin/HEAD`.
-- `sync`: fetch every store once; lanes in topological order; per checkout: skip dirty (report); if a parent PR is
+- `sync`: fetch every store once; lanes in topological order; per worktree: skip dirty (report); if a parent PR is
   MERGED (`gh pr view <n> --json state`), re-parent its children to its parent; `git rebase --onto <parentRef>
-  <recorded base> <branch>` inside that checkout; record new base. Conflict → save progress in `.work.json.sync`,
-  print the checkout path, exit 1; `--continue` resumes, `--abort` aborts the current rebase and clears state.
+  <recorded base> <branch>` inside that worktree; record new base. Conflict → save progress in `.work.json.sync`,
+  print the worktree path, exit 1; `--continue` resumes, `--abort` aborts the current rebase and clears state.
   Git's `--update-refs` is not used (it skips branches checked out in other worktrees).
-- `submit`: topological; skip checkouts with no commits over their parent; `git push --force-with-lease -u origin
+- `submit`: topological; skip worktrees with no commits over their parent; `git push --force-with-lease -u origin
   <branch>`; `gh pr create --base <parent branch or trunk> --head <branch>` (or `gh pr edit --base` when the base
   changed); record PR numbers. `WORK_GH` overrides the gh binary (tests use a stub).
 

@@ -12,7 +12,7 @@ export interface SpaceConfig {
   cleanup_days?: number;
 }
 
-export interface EntryInfo {
+export interface WorkspaceInfo {
   space: string;
   name: string;
   path: string;
@@ -123,10 +123,10 @@ export class Root {
     return dir;
   }
 
-  entries(space: string): EntryInfo[] {
+  workspaces(space: string): WorkspaceInfo[] {
     const dir = join(this.path, space);
     if (!isDir(dir)) return [];
-    const out: EntryInfo[] = [];
+    const out: WorkspaceInfo[] = [];
     for (const name of readdirSync(dir)) {
       if (name.startsWith(".")) continue;
       const path = join(dir, name);
@@ -140,24 +140,24 @@ export class Root {
     return out;
   }
 
-  allEntries(): EntryInfo[] {
-    return this.spaces().flatMap((s) => this.entries(s));
+  allWorkspaces(): WorkspaceInfo[] {
+    return this.spaces().flatMap((s) => this.workspaces(s));
   }
 
-  archived(space?: string): EntryInfo[] {
+  archived(space?: string): WorkspaceInfo[] {
     const spaces = space ? [space] : this.spaces();
     return spaces.flatMap((s) =>
-      this.entries(join(s, ".archive")).map((e) => ({ ...e, space: s })),
+      this.workspaces(join(s, ".archive")).map((e) => ({ ...e, space: s })),
     );
   }
 
-  /** Where a path sits inside the root: space, entry, and the rest (lane, repo, …). */
-  locate(p: string): { space: string; entry: string; entryPath: string; rest: string[] } | null {
+  /** Where a path sits inside the root: space, workspace, and the rest (lane, repo, …). */
+  locate(p: string): { space: string; workspace: string; workspacePath: string; rest: string[] } | null {
     const rel = relative(this.path, real(p));
     if (rel === "" || rel.startsWith("..")) return null;
     const parts = rel.split(sep);
-    const [space, entry, ...rest] = parts;
-    if (!space || !entry || space.startsWith(".") || entry.startsWith(".")) return null;
-    return { space, entry, entryPath: join(this.path, space, entry), rest };
+    const [space, workspace, ...rest] = parts;
+    if (!space || !workspace || space.startsWith(".") || workspace.startsWith(".")) return null;
+    return { space, workspace, workspacePath: join(this.path, space, workspace), rest };
   }
 }

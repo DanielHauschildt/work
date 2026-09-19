@@ -10,21 +10,21 @@ export interface Candidate {
 }
 
 export const SUBCOMMANDS: Record<string, string> = {
-  new: "create an entry without the picker",
-  add: "add a repo checkout to a lane",
+  new: "create a workspace without the picker",
+  add: "add a repo worktree to a lane",
   lane: "create a (stacked) lane",
-  mv: "move / rename / promote an entry",
-  archive: "move an entry to <space>/.archive",
-  unarchive: "restore an archived entry",
-  rm: "delete an entry, lane or checkout",
-  ls: "list entries",
+  mv: "move / rename / promote a workspace",
+  archive: "move a workspace to <space>/.archive",
+  unarchive: "restore an archived workspace",
+  rm: "delete a workspace, lane or worktree",
+  ls: "list workspaces",
   info: "show lanes, branches and status",
-  path: "print the path of an entry",
+  path: "print the path of a workspace",
   sync: "restack lanes onto their parents",
   submit: "push lanes and open/update PRs",
-  clone: "new entry from a git URL",
-  worktree: "new entry with a worktree of a repo",
-  back: "go to the previous entry",
+  clone: "new workspace from a git URL",
+  worktree: "new workspace with a worktree of a repo",
+  back: "go to the previous workspace",
   init: "print shell integration",
   space: "list, create or configure spaces",
 };
@@ -58,15 +58,15 @@ function filter(cands: Candidate[], cur: string): Candidate[] {
     .map((x) => x.c);
 }
 
-function entryCandidates(root: Root, space: string | undefined): Candidate[] {
-  if (space) return root.entries(space).map((e) => ({ value: e.name, desc: space }));
-  return root.allEntries().map((e) => ({ value: `${e.space}/${e.name}` }));
+function workspaceCandidates(root: Root, space: string | undefined): Candidate[] {
+  if (space) return root.workspaces(space).map((e) => ({ value: e.name, desc: space }));
+  return root.allWorkspaces().map((e) => ({ value: `${e.space}/${e.name}` }));
 }
 
 function laneCandidates(root: Root, cwd: string): Candidate[] {
   const loc = root.locate(cwd);
-  if (!loc || !hasModel(loc.entryPath)) return [];
-  const model = loadModel(loc.entryPath);
+  if (!loc || !hasModel(loc.workspacePath)) return [];
+  const model = loadModel(loc.workspacePath);
   return Object.entries(model.lanes).map(([n, l]) => ({ value: n, desc: l.branch }));
 }
 
@@ -122,10 +122,10 @@ export function complete(root: Root, opts: { cmd: string; space?: string; words:
     const subs = Object.entries(SUBCOMMANDS).map(([value, desc]) => ({ value, desc }));
     if (!space && cur.includes("/")) {
       const [sp] = cur.split("/");
-      return filter(root.entries(sp!).map((e) => ({ value: `${sp}/${e.name}` })), cur);
+      return filter(root.workspaces(sp!).map((e) => ({ value: `${sp}/${e.name}` })), cur);
     }
-    const entries = space ? entryCandidates(root, space) : root.spaces().map((s) => ({ value: `${s}/`, desc: "space" }));
-    return filter([...entries, ...subs], cur);
+    const workspaces = space ? workspaceCandidates(root, space) : root.spaces().map((s) => ({ value: `${s}/`, desc: "space" }));
+    return filter([...workspaces, ...subs], cur);
   }
 
   switch (sub) {
@@ -135,15 +135,15 @@ export function complete(root: Root, opts: { cmd: string; space?: string; words:
     case "lane":
       return argIndex === 0 ? [] : filter(storeCandidates(root), cur);
     case "mv":
-      if (argIndex === 0) return filter(entryCandidates(root, space), cur);
+      if (argIndex === 0) return filter(workspaceCandidates(root, space), cur);
       if (argIndex === 1) return filter(root.spaces().map((s) => ({ value: `${s}/`, desc: "space" })), cur);
       return [];
     case "rm":
-      return filter([...laneCandidates(root, opts.cwd).map((c) => ({ value: `./${c.value}`, desc: "lane" })), ...entryCandidates(root, space)], cur);
+      return filter([...laneCandidates(root, opts.cwd).map((c) => ({ value: `./${c.value}`, desc: "lane" })), ...workspaceCandidates(root, space)], cur);
     case "archive":
     case "path":
     case "info":
-      return argIndex === 0 ? filter(entryCandidates(root, space), cur) : sub === "path" ? filter(laneCandidates(root, opts.cwd), cur) : [];
+      return argIndex === 0 ? filter(workspaceCandidates(root, space), cur) : sub === "path" ? filter(laneCandidates(root, opts.cwd), cur) : [];
     case "space":
       if (argIndex === 0) return filter([{ value: "ls" }, { value: "new" }, { value: "set" }], cur);
       if (argIndex === 1 && positional[1] === "set") return filter(root.spaces().map((s) => ({ value: s })), cur);

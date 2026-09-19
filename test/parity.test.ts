@@ -102,7 +102,7 @@ beforeEach(() => {
 });
 afterEach(() => sb.cleanup());
 
-const ENTRIES: [string, number][] = [
+const WORKSPACES: [string, number][] = [
   ["2026-09-01-redis-server", 400],
   ["2026-09-02-redis-client", 30],
   ["2026-08-11-kafka-lab", 2],
@@ -142,20 +142,20 @@ d("picker parity (try vs work)", () => {
   ];
   for (const [name, keys] of cases) {
     test(name, () => {
-      seed(ENTRIES);
+      seed(WORKSPACES);
       expectSameEffect(keys);
     });
   }
 
   test("initial query argument filters like try", () => {
-    seed(ENTRIES);
+    seed(WORKSPACES);
     const t = runTry(["exec", "redis", "--and-keys", "ENTER"]);
     const w = runWork(["exec", "redis", "--and-keys", "ENTER"]);
     expect(basename(workCd(w)!)).toBe(basename(evalTry(t)!));
   });
 
   test("ctrl-t with empty query prompts for a name", () => {
-    seed(ENTRIES);
+    seed(WORKSPACES);
     const t = runTry(["exec", "--and-keys", "CTRL-T"], sb.dir);
     const w = runWork(["exec", "--and-keys", "CTRL-T"], sb.dir);
     expect(w.code).toBe(t.code);
@@ -164,7 +164,7 @@ d("picker parity (try vs work)", () => {
 
 d("render parity", () => {
   test("--and-exit list area matches try (header/footer differ on purpose)", () => {
-    seed(ENTRIES);
+    seed(WORKSPACES);
     const t = runTry(["exec", "--and-exit"]);
     const w = runWork(["exec", "--and-exit"]);
     /** Rows between the separator under the search line and the footer separator. */
@@ -183,7 +183,7 @@ d("render parity", () => {
   });
 
   test("--and-type prefills the search like try", () => {
-    seed(ENTRIES);
+    seed(WORKSPACES);
     const t = runTry(["exec", "--and-type", "redis", "--and-exit"]);
     const w = runWork(["exec", "--and-type", "redis", "--and-exit"]);
     // create rows differ on purpose: try "Create new: X", work "New tries/X" plus a second "no date" variant row
@@ -271,7 +271,7 @@ d("command parity", () => {
     evalTry(runTry(["exec", "./"], plain), plain);
     runWork(["exec", "./"], plain);
     expect(listing(join(workRoot, "tries"))).toEqual(listing(tryDir));
-    // work puts the worktree in lane root on a named branch (try: detached at the entry root)
+    // work puts the worktree in lane root on a named branch (try: detached at the workspace root)
     const today = listing(tryDir).find((n) => n.endsWith("-exp"))!;
     expect(g(join(workRoot, "tries", today, "root", "seed-app"), "branch", "--show-current")).toBe("exp");
   }, 60_000);

@@ -3,7 +3,7 @@ import { join, relative, sep } from "node:path";
 import type { Root } from "./root.ts";
 
 interface Visit {
-  p: string; // entry path relative to root
+  p: string; // workspace path relative to root
   t: number; // epoch ms
 }
 
@@ -32,25 +32,25 @@ export class History {
     return visits;
   }
 
-  private rel(entryPath: string): string {
-    return relative(this.root.path, entryPath).split(sep).join("/");
+  private rel(workspacePath: string): string {
+    return relative(this.root.path, workspacePath).split(sep).join("/");
   }
 
-  record(entryPath: string, t = Date.now()): void {
+  record(workspacePath: string, t = Date.now()): void {
     mkdirSync(this.root.stateDir, { recursive: true });
-    appendFileSync(this.file, `${JSON.stringify({ p: this.rel(entryPath), t })}\n`);
+    appendFileSync(this.file, `${JSON.stringify({ p: this.rel(workspacePath), t })}\n`);
     const visits = this.read();
     if (visits.length > MAX_LINES) this.write(compact(visits));
   }
 
-  /** Last visit per entry path (absolute). */
+  /** Last visit per workspace path (absolute). */
   lastVisits(): Map<string, Date> {
     const map = new Map<string, Date>();
     for (const v of this.read()) map.set(join(this.root.path, v.p), new Date(v.t));
     return map;
   }
 
-  /** Most recent visited entry other than `current` that still exists. */
+  /** Most recent visited workspace other than `current` that still exists. */
   previous(current: string | undefined): string | undefined {
     const visits = this.read();
     for (let i = visits.length - 1; i >= 0; i--) {
@@ -60,7 +60,7 @@ export class History {
     return undefined;
   }
 
-  /** Keep recency when an entry moves. */
+  /** Keep recency when a workspace moves. */
   rename(from: string, to: string): void {
     const a = this.rel(from);
     const b = this.rel(to);

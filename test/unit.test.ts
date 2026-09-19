@@ -104,7 +104,7 @@ describe("emit", () => {
 });
 
 describe("history", () => {
-  test("records visits, previous entry, rename", () => {
+  test("records visits, previous workspace, rename", () => {
     const root = new Root(sb.root);
     const h = new History(root);
     const a = join(root.path, "tries", "a");

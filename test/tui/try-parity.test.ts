@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 import { parseTestKeys, runPicker } from "../../src/tui/index.ts";
-import { TRY_BIN, capture, itemsFromDir, makeEntries, plain, tmpRoot, today } from "./helpers.ts";
+import { TRY_BIN, capture, itemsFromDir, makeWorkspaces, plain, tmpRoot, today } from "./helpers.ts";
 
 const hasTry = existsSync(TRY_BIN);
 const SPACE = "tries";
@@ -138,7 +138,7 @@ describe.skipIf(!hasTry)("list parity with try", () => {
   beforeAll(() => {
     dir = tmpRoot();
     // Distinct ages keep scores apart (the Ruby sort is unstable on ties).
-    makeEntries(dir, {
+    makeWorkspaces(dir, {
       "2026-09-18-redis-bench": 2.2,
       "2026-09-10-vector-search": 30.5,
       "2025-01-01-some-very-long-name-that-goes-on-and-on-and-on-forever-and-ever": 200.3,
@@ -149,9 +149,9 @@ describe.skipIf(!hasTry)("list parity with try", () => {
       ".hidden": 1,
     });
     many = tmpRoot();
-    const entries: Record<string, number> = {};
-    for (let i = 0; i < 25; i++) entries[`2026-07-${String(i + 1).padStart(2, "0")}-item-${i}`] = 3 + i * 7.3;
-    makeEntries(many, entries);
+    const workspaces: Record<string, number> = {};
+    for (let i = 0; i < 25; i++) workspaces[`2026-07-${String(i + 1).padStart(2, "0")}-item-${i}`] = 3 + i * 7.3;
+    makeWorkspaces(many, workspaces);
   });
 
   afterAll(() => {

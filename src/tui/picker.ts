@@ -7,7 +7,7 @@ import { type InputStream, TerminalInput } from "./input.ts";
 import { UI, type UIOutput } from "./ui.ts";
 
 export interface PickerItem {
-  /** entry folder name (matching + display) */
+  /** workspace folder name (matching + display) */
   basename: string;
   /** absolute path */
   path: string;
@@ -80,7 +80,7 @@ interface CreateRow {
 interface View {
   rows: Row[];
   creates: CreateRow[];
-  /** space new entries go to */
+  /** space new workspaces go to */
   target: string;
   /** query without a leading `space/` */
   rest: string;
@@ -350,7 +350,7 @@ class Picker {
             return { type: "cd", path: tries[this.cursorPos]!.item.path };
           } else if (this.cursorPos - tries.length < view.creates.length) {
             const row = view.creates[this.cursorPos - tries.length]!;
-            const result = await this.createEntry(row.space, row.option, view.rest);
+            const result = await this.createWorkspace(row.space, row.option, view.rest);
             if (result) return result;
           }
           break;
@@ -761,7 +761,7 @@ class Picker {
         this.status = `Invalid name: ${view.rest}`;
         return null;
       }
-      return this.createEntry(space, option, view.rest);
+      return this.createWorkspace(space, option, view.rest);
     }
 
     // No name typed, prompt for one
@@ -772,14 +772,14 @@ class Picker {
     this.ui.flush();
     this.stderr.write("\x1b[?25h");
 
-    const entry = await this.promptLine();
+    const rest = await this.promptLine();
     this.stderr.write("\x1b[?25l");
-    if (entry === "") return null;
-    return this.createEntry(space, option, entry);
+    if (rest === "") return null;
+    return this.createWorkspace(space, option, rest);
   }
 
   /** mkdir result; a space that doesn't exist yet is created first (after asking for its default prefix). */
-  private async createEntry(space: string, option: CreateOption, rest: string): Promise<PickerResult> {
+  private async createWorkspace(space: string, option: CreateOption, rest: string): Promise<PickerResult> {
     if (!this.spaceExists(space)) {
       const variant = await this.chooseSpaceDefault(space, option.prefix === "" ? "" : "auto");
       if (variant === null || !this.addSpace(space, variant)) return null;
@@ -830,7 +830,7 @@ class Picker {
     const ui = this.ui;
     ui.cls();
     for (;;) {
-      ui.puts(`{h2}New space "${name}" — default for new entries:{reset}`);
+      ui.puts(`{h2}New space "${name}" — default for new workspaces:{reset}`);
       ui.puts();
       choices.forEach(([, label, example], i) => {
         const isSelected = i === selected;

@@ -103,7 +103,7 @@ export function resolveRepo(root: Root, spec: string, cwd: string): RepoSource {
   if (looksLikePath && existsSync(asPath) && !spec.endsWith(".git")) {
     const top = gitTry(asPath, ["rev-parse", "--show-toplevel"]);
     if (!top) fail(`not a git repository: ${spec}`);
-    // a checkout of a store (e.g. inside another entry) → use the store; a linked worktree → its main repo
+    // a worktree of a store (e.g. inside another workspace) → use the store; a worktree of a plain repo → its main repo
     const common = gitTry(top, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     if (common && real(common).startsWith(root.reposDir + "/")) {
       fetchStore(root, real(common));
@@ -164,7 +164,7 @@ export function trunkBranchName(src: RepoSource): string {
   return trunkRef(src).replace(/^origin\//, "");
 }
 
-export interface AddCheckoutResult {
+export interface AddWorktreeResult {
   base: string;
   created: boolean;
 }
@@ -173,13 +173,13 @@ export interface AddCheckoutResult {
  * Create a worktree at `path` on `branch`:
  * existing local branch → check it out; `origin/<branch>` → track it; else new branch from `baseRef`.
  */
-export function addCheckout(
+export function addWorktree(
   root: Root,
   src: RepoSource,
   path: string,
   branch: string,
   baseRef: string,
-): AddCheckoutResult {
+): AddWorktreeResult {
   if (existsSync(path)) fail(`${path} already exists`);
   mkdirSync(dirname(path), { recursive: true });
   return withLock(root.stateDir, src.path, () => {
@@ -203,15 +203,15 @@ export function addCheckout(
 }
 
 /** Remove a worktree cleanly (branch is kept); falls back to deleting the folder and pruning. */
-export function removeCheckout(root: Root, checkout: string): void {
-  const common = commonDirOf(checkout);
+export function removeWorktree(root: Root, worktree: string): void {
+  const common = commonDirOf(worktree);
   if (!common) {
-    rmSync(checkout, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
     return;
   }
   withLock(root.stateDir, commonKey(common), () => {
-    run(["git", "--git-dir", common, "worktree", "remove", "--force", "--force", checkout], { allowFail: true });
-    if (existsSync(checkout)) rmSync(checkout, { recursive: true, force: true });
+    run(["git", "--git-dir", common, "worktree", "remove", "--force", "--force", worktree], { allowFail: true });
+    if (existsSync(worktree)) rmSync(worktree, { recursive: true, force: true });
     run(["git", "--git-dir", common, "worktree", "prune"], { allowFail: true });
   });
 }
@@ -221,7 +221,7 @@ export function commonKey(common: string): string {
   return basename(common) === ".git" ? dirname(common) : common;
 }
 
-/** After a checkout moved on disk, reconnect it with its store. */
-export function repairCheckout(checkout: string): void {
-  run(["git", "-C", checkout, "worktree", "repair"], { allowFail: true });
+/** After a worktree moved on disk, reconnect it with its store. */
+export function repairWorktree(worktree: string): void {
+  run(["git", "-C", worktree, "worktree", "repair"], { allowFail: true });
 }

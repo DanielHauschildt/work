@@ -53,12 +53,12 @@ export function makeRemote(sb: Sandbox, name: string, files: Record<string, stri
   return bare;
 }
 
-/** Commit a file change inside a checkout. */
-export function commit(checkout: string, file: string, content: string, msg = `edit ${file}`): string {
-  writeFileSync(join(checkout, file), content);
-  g(checkout, "add", file);
-  g(checkout, "commit", "--quiet", "-m", msg);
-  return g(checkout, "rev-parse", "HEAD");
+/** Commit a file change inside a worktree. */
+export function commit(worktree: string, file: string, content: string, msg = `edit ${file}`): string {
+  writeFileSync(join(worktree, file), content);
+  g(worktree, "add", file);
+  g(worktree, "commit", "--quiet", "-m", msg);
+  return g(worktree, "rev-parse", "HEAD");
 }
 
 /** Push a new commit to the remote's main from a scratch clone (simulates upstream progress). */

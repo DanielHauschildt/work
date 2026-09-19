@@ -51,8 +51,8 @@ export function gitTry(dir: string, args: string[]): string | undefined {
   return r.code === 0 ? r.stdout.trim() : undefined;
 }
 
-/** A folder is a checkout when it has a `.git` file (linked worktree) or `.git` directory. */
-export function isCheckout(dir: string): boolean {
+/** A folder is a worktree when it has a `.git` file (linked worktree) or a `.git` directory (plain repo). */
+export function isWorktree(dir: string): boolean {
   return existsSync(join(dir, ".git"));
 }
 
@@ -65,21 +65,21 @@ export function isLinkedWorktree(dir: string): boolean {
 }
 
 /** Common git dir (store or main repo .git) of a linked worktree, read from its `.git` file — works even when the worktree was moved. */
-export function commonDirOf(checkout: string): string | undefined {
-  const r = gitTry(checkout, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+export function commonDirOf(worktree: string): string | undefined {
+  const r = gitTry(worktree, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   if (r) return r;
   try {
-    const m = readFileSync(join(checkout, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m);
+    const m = readFileSync(join(worktree, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m);
     if (!m) return undefined;
-    const gitdir = isAbsolute(m[1]!) ? m[1]! : resolve(checkout, m[1]!);
+    const gitdir = isAbsolute(m[1]!) ? m[1]! : resolve(worktree, m[1]!);
     return resolve(gitdir, "..", "..");
   } catch {
     return undefined;
   }
 }
 
-/** Checkouts (worktrees or repos) up to `depth` levels below dir, not descending into checkouts. */
-export function findCheckouts(dir: string, depth = 2): string[] {
+/** Worktrees (linked worktrees or plain repos) up to `depth` levels below dir, not descending into them. */
+export function findWorktrees(dir: string, depth = 2): string[] {
   const out: string[] = [];
   const walk = (d: string, level: number) => {
     let names: string[];
@@ -96,7 +96,7 @@ export function findCheckouts(dir: string, depth = 2): string[] {
       } catch {
         continue;
       }
-      if (isCheckout(p)) out.push(p);
+      if (isWorktree(p)) out.push(p);
       else if (level < depth) walk(p, level + 1);
     }
   };
@@ -104,7 +104,7 @@ export function findCheckouts(dir: string, depth = 2): string[] {
   return out.sort();
 }
 
-export interface CheckoutStatus {
+export interface WorktreeStatus {
   branch: string | undefined;
   dirty: boolean;
   /** Commits not on any remote-tracking ref. */
@@ -112,7 +112,7 @@ export interface CheckoutStatus {
   rebasing: boolean;
 }
 
-export function checkoutStatus(dir: string): CheckoutStatus {
+export function worktreeStatus(dir: string): WorktreeStatus {
   const branch = gitTry(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const dirty = (gitTry(dir, ["status", "--porcelain"]) ?? "") !== "";
   const unpushed = Number(gitTry(dir, ["rev-list", "--count", "HEAD", "--not", "--remotes"]) ?? "0") || 0;

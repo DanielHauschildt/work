@@ -35,9 +35,9 @@ export function stripDate(name: string): string {
   return name.replace(DATE_PREFIX, "");
 }
 
-/** Branch for a lane: entry name without date; lanes other than root append `-<lane>`. */
-export function laneBranch(entryName: string, lane: string): string {
-  const base = sanitizeRef(stripDate(entryName));
+/** Branch for a lane: workspace name without date; lanes other than root append `-<lane>`. */
+export function laneBranch(workspaceName: string, lane: string): string {
+  const base = sanitizeRef(stripDate(workspaceName));
   return lane === "root" ? base : `${base}-${sanitizeRef(lane)}`;
 }
 

@@ -24,7 +24,7 @@ export interface SyncState {
   pending: [string, string][];
 }
 
-export interface EntryModel {
+export interface WorkspaceModel {
   version: 1;
   lanes: Record<string, LaneRec>;
   sync: SyncState | null;
@@ -32,19 +32,19 @@ export interface EntryModel {
 
 export const MODEL_FILE = ".work.json";
 
-export function modelPath(entryPath: string): string {
-  return join(entryPath, MODEL_FILE);
+export function modelPath(workspacePath: string): string {
+  return join(workspacePath, MODEL_FILE);
 }
 
-export function hasModel(entryPath: string): boolean {
-  return existsSync(modelPath(entryPath));
+export function hasModel(workspacePath: string): boolean {
+  return existsSync(modelPath(workspacePath));
 }
 
-export function loadModel(entryPath: string): EntryModel {
-  const file = modelPath(entryPath);
+export function loadModel(workspacePath: string): WorkspaceModel {
+  const file = modelPath(workspacePath);
   if (!existsSync(file)) return { version: 1, lanes: {}, sync: null };
   try {
-    const m = JSON.parse(readFileSync(file, "utf8")) as EntryModel;
+    const m = JSON.parse(readFileSync(file, "utf8")) as WorkspaceModel;
     m.lanes ??= {};
     m.sync ??= null;
     return m;
@@ -53,8 +53,8 @@ export function loadModel(entryPath: string): EntryModel {
   }
 }
 
-export function saveModel(entryPath: string, model: EntryModel): void {
-  const file = modelPath(entryPath);
+export function saveModel(workspacePath: string, model: WorkspaceModel): void {
+  const file = modelPath(workspacePath);
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(model, null, 2)}\n`);
   renameSync(tmp, file);
@@ -65,7 +65,7 @@ export function repoBranch(lane: LaneRec, repo: string): string {
 }
 
 /** Lanes ordered parents-first (roots sorted by name, then children by name). */
-export function topoLanes(model: EntryModel): string[] {
+export function topoLanes(model: WorkspaceModel): string[] {
   const names = Object.keys(model.lanes).sort();
   const out: string[] = [];
   const seen = new Set<string>();
@@ -83,14 +83,14 @@ export function topoLanes(model: EntryModel): string[] {
   return out;
 }
 
-export function childrenOf(model: EntryModel, lane: string): string[] {
+export function childrenOf(model: WorkspaceModel, lane: string): string[] {
   return Object.keys(model.lanes)
     .filter((n) => model.lanes[n]!.parent === lane)
     .sort();
 }
 
 /** Nearest ancestor lane (excluding `lane`) that contains `repo`, or null for trunk. */
-export function repoParentLane(model: EntryModel, lane: string, repo: string): string | null {
+export function repoParentLane(model: WorkspaceModel, lane: string, repo: string): string | null {
   let p = model.lanes[lane]?.parent ?? null;
   const seen = new Set<string>();
   while (p && !seen.has(p)) {

@@ -5,17 +5,17 @@ import { splitDashDash, takeFlag, takeOption, takeOptions } from "./args.ts";
 import { complete, formatCandidates } from "./complete.ts";
 import { Emitter } from "./emit.ts";
 import {
-  archiveEntry,
-  createEntry,
-  deleteEntries,
-  moveEntry,
+  archiveWorkspace,
+  createWorkspace,
+  deleteWorkspaces,
+  moveWorkspace,
   parseMoveTarget,
-  resolveEntry,
+  resolveWorkspace,
   spacePrefix,
-  unarchiveEntry,
-} from "./entries.ts";
+  unarchiveWorkspace,
+} from "./workspaces.ts";
 import { fail, WorkError } from "./errors.ts";
-import { checkoutStatus, findCheckouts, gitTry, run } from "./git.ts";
+import { findWorktrees, gitTry, run, worktreeStatus } from "./git.ts";
 import { History } from "./history.ts";
 import { initScript, parseShortcuts } from "./init.ts";
 import {
@@ -30,7 +30,7 @@ import {
 } from "./lanes.ts";
 import { hasModel, loadModel, repoBranch, topoLanes } from "./model.ts";
 import { cloneDirName, dashify, isGitUri, today, versionedBase } from "./naming.ts";
-import { expandHome, isInside, type EntryInfo, Root } from "./root.ts";
+import { expandHome, isInside, Root, type WorkspaceInfo } from "./root.ts";
 import { parentRefOf, submit, sync } from "./stack.ts";
 import { type CreateOption, formatRelativeTime, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
 
@@ -73,20 +73,20 @@ Shell setup (~/.zshrc, ~/.bashrc; fish: eval (work init … | string collect)):
 Usage:
   work [query]                     Picker over all spaces (Tab switches scope)
   work --space S [query]           Picker in space S (shortcuts: tries, labs, …)
-  work new [--space S] [--prefix P] <name>   Create an entry without the picker
-  work - | work back               Previous entry
-  work . <name> | ./path [name]    New entry with a worktree of that repo
+  work new [--space S] [--prefix P] <name>   Create a workspace without the picker
+  work - | work back               Previous workspace
+  work . <name> | ./path [name]    New workspace with a worktree of that repo
   work worktree dir|<path> [name]  Same (try compatible)
-  work clone <url> [name] | <url>  New entry with a checkout of <url>
-  work path <query> [lane]         Print the path of an entry (or lane)
+  work clone <url> [name] | <url>  New workspace with a worktree of <url>
+  work path <query> [lane]         Print the path of a workspace (or lane)
   work ls [--space S] [--json] [--stale] [--archived]
   work space [ls | new <name> [--prefix P] | set <name> --prefix P]
-  work info [entry] [--json]       Lanes, branches, parents, status, PRs
+  work info [workspace] [--json]   Lanes, branches, parents, status, PRs
   work add <repo|url|path> [branch] [--lane L]
   work lane <name> [repos…] [--on <lane>|trunk]
-  work mv [entry] <space>[/<name>] [--prefix P]
-  work archive [entry] | work unarchive <entry>
-  work rm <entry>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]
+  work mv [workspace] <space>[/<name>] [--prefix P]
+  work archive [workspace] | work unarchive <workspace>
+  work rm <workspace>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]
   work sync [--continue|--abort]   Restack lanes onto their parents
   work submit [--draft]            Push lanes, open/update stacked PRs (gh)
   work init [path] [--shortcut NAME[=SPACE]]…
@@ -94,7 +94,7 @@ Usage:
 
 Options:
   --path DIR     root folder (default ~/Work; env WORK_ROOT)
-  --space S      space (default ${DEFAULT_SPACE});   --prefix auto|none|TEXT   entry name prefix
+  --space S      space (default ${DEFAULT_SPACE});   --prefix auto|none|TEXT   workspace name prefix
   --json         machine-readable output;   --yes  no confirmation;   --force  ignore dirty/unpushed
   --no-colors, --no-expand-tokens, NO_COLOR
 
@@ -125,14 +125,14 @@ function confirmYes(ctx: Ctx, what: string, warnings: string[]): void {
   if (line.trim() !== "YES") fail("Cancelled.");
 }
 
-function currentEntry(ctx: Ctx): { entry: EntryInfo; rest: string[] } {
+function currentWorkspace(ctx: Ctx): { workspace: WorkspaceInfo; rest: string[] } {
   const loc = ctx.root.locate(ctx.cwd);
-  if (!loc) fail(`not inside an entry of ${ctx.root.path}`);
-  return { entry: resolveEntry(ctx.root, loc.entryPath, ctx.cwd), rest: loc.rest };
+  if (!loc) fail(`not inside a workspace of ${ctx.root.path}`);
+  return { workspace: resolveWorkspace(ctx.root, loc.workspacePath, ctx.cwd), rest: loc.rest };
 }
 
-function visit(ctx: Ctx, entryPath: string, cdTo = entryPath): void {
-  ctx.history.record(entryPath);
+function visit(ctx: Ctx, workspacePath: string, cdTo = workspacePath): void {
+  ctx.history.record(workspacePath);
   ctx.emit.cd(cdTo);
 }
 
@@ -140,17 +140,17 @@ function staleDays(ctx: Ctx, space: string): number | undefined {
   return ctx.root.spaceConfig(space).cleanup_days;
 }
 
-function badgesFor(entryPath: string): string | undefined {
-  if (!hasModel(entryPath)) return undefined;
-  const model = loadModel(entryPath);
+function badgesFor(workspacePath: string): string | undefined {
+  if (!hasModel(workspacePath)) return undefined;
+  const model = loadModel(workspacePath);
   const lanes = Object.keys(model.lanes);
   const repos = [...new Set(lanes.flatMap((l) => Object.keys(model.lanes[l]!.repos)))].sort();
   if (!lanes.length) return undefined;
   return lanes.length === 1 && lanes[0] === DEFAULT_LANE ? repos.join(" ") : `${lanes.length} lanes: ${repos.join(" ")}`;
 }
 
-async function asyncDirty(entryPath: string): Promise<boolean> {
-  for (const c of findCheckouts(entryPath, 2)) {
+async function asyncDirty(workspacePath: string): Promise<boolean> {
+  for (const c of findWorktrees(workspacePath, 2)) {
     const p = Bun.spawn(["git", "-C", c, "status", "--porcelain"], { stdout: "pipe", stderr: "ignore" });
     const text = await new Response(p.stdout).text();
     if (text.trim()) return true;
@@ -170,7 +170,7 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
   const startScope = ctx.space && spaces.includes(ctx.space) ? ctx.space : "*";
   const visits = ctx.history.lastVisits();
   const now = new Date();
-  const items: PickerItem[] = ctx.root.allEntries().map((e) => {
+  const items: PickerItem[] = ctx.root.allWorkspaces().map((e) => {
     const recency = visits.get(e.path) ?? e.mtime;
     const days = staleDays(ctx, e.space);
     return {
@@ -216,22 +216,22 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       visit(ctx, result.path);
       return 0;
     case "mkdir": {
-      const { path } = createEntry(ctx.root, result.space, result.name);
+      const { path } = createWorkspace(ctx.root, result.space, result.name);
       visit(ctx, path);
       return 0;
     }
     case "delete": {
-      deleteEntries(ctx.root, result.paths, { force: true });
+      deleteWorkspaces(ctx.root, result.paths, { force: true });
       info(`Deleted: ${result.paths.map((p) => basename(p)).join(", ")}`);
       const hit = result.paths.find((p) => isInside(ctx.cwd, p));
       if (hit) ctx.emit.cd(resolve(hit, ".."));
       return 0;
     }
     case "move": {
-      const entry = resolveEntry(ctx.root, result.from, ctx.cwd);
-      const target = parseMoveTarget(ctx.root, entry, result.to, undefined);
-      const moved = moveEntry(ctx.root, entry, target, ctx.history, ctx.cwd);
-      info(`Moved ${entry.space}/${entry.name} → ${target.space}/${target.name}`);
+      const workspace = resolveWorkspace(ctx.root, result.from, ctx.cwd);
+      const target = parseMoveTarget(ctx.root, workspace, result.to, undefined);
+      const moved = moveWorkspace(ctx.root, workspace, target, ctx.history, ctx.cwd);
+      info(`Moved ${workspace.space}/${workspace.name} → ${target.space}/${target.name}`);
       ctx.history.record(moved.path);
       ctx.emit.cd(moved.cd ?? moved.path);
       return 0;
@@ -257,10 +257,10 @@ function cmdSpace(ctx: Ctx, args: string[]): number {
     case "ls": {
       const rows = ctx.root.spaces().map((space) => {
         const cfg = ctx.root.spaceConfig(space);
-        return { space, prefix: cfg.prefix ?? "auto", entries: ctx.root.entries(space).length, path: ctx.root.spacePath(space) };
+        return { space, prefix: cfg.prefix ?? "auto", workspaces: ctx.root.workspaces(space).length, path: ctx.root.spacePath(space) };
       });
       if (ctx.json) out(JSON.stringify(rows, null, 2));
-      else for (const r of rows) out(`${r.space.padEnd(16)} prefix ${(r.prefix === "" ? "none" : r.prefix).padEnd(10)} ${r.entries} entries`);
+      else for (const r of rows) out(`${r.space.padEnd(16)} prefix ${(r.prefix === "" ? "none" : r.prefix).padEnd(10)} ${r.workspaces} workspaces`);
       return 0;
     }
     case "new": {
@@ -287,7 +287,7 @@ function cmdNew(ctx: Ctx, args: string[]): number {
   const name = args.join(" ").trim();
   if (!name) fail("usage: work new [--space S] [--prefix P] <name>");
   const space = ctx.space ?? DEFAULT_SPACE;
-  const { path, created } = createEntry(ctx.root, space, `${spacePrefix(ctx.root, space, ctx.prefix)}${dashify(name)}`);
+  const { path, created } = createWorkspace(ctx.root, space, `${spacePrefix(ctx.root, space, ctx.prefix)}${dashify(name)}`);
   visit(ctx, path);
   if (ctx.json) {
     out(JSON.stringify({ space, name: basename(path), path, created }));
@@ -303,21 +303,21 @@ function cmdClone(ctx: Ctx, args: string[]): number {
   const space = ctx.space ?? DEFAULT_SPACE;
   const dir = cloneDirName(url, custom, spacePrefix(ctx.root, space, ctx.prefix));
   if (!dir) fail(`Error: Unable to parse git URI: ${url}`);
-  const entryPath = join(ctx.root.spacePath(space), dir);
-  if (existsSync(entryPath)) fail(`${entryPath} already exists`);
-  createEntry(ctx.root, space, dir);
-  info(`Using git clone (bare store + worktree) to create this entry from ${url}.`);
+  const workspacePath = join(ctx.root.spacePath(space), dir);
+  if (existsSync(workspacePath)) fail(`${workspacePath} already exists`);
+  createWorkspace(ctx.root, space, dir);
+  info(`Using git clone (bare store + worktree) to create this workspace from ${url}.`);
   try {
-    const checkout = addRepo(ctx.root, entryPath, { lane: DEFAULT_LANE, spec: url, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(space).post_add });
-    visit(ctx, entryPath, checkout);
+    const worktree = addRepo(ctx.root, workspacePath, { lane: DEFAULT_LANE, spec: url, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(space).post_add });
+    visit(ctx, workspacePath, worktree);
   } catch (e) {
-    removeTree(ctx.root, entryPath);
+    removeTree(ctx.root, workspacePath);
     throw e;
   }
   return 0;
 }
 
-/** try's `.`, `./path` and `worktree dir|path`: new dated entry, worktree of the repo in lane root. */
+/** try's `.`, `./path` and `worktree dir|path`: new dated workspace, worktree of the repo in lane root. */
 function cmdDot(ctx: Ctx, pathArg: string, customParts: string[], explicit: boolean): number {
   const custom = customParts.join(" ").trim();
   if (pathArg === "." && !custom && !explicit) fail("Error: 'work .' requires a name argument\nUsage: work . <name>");
@@ -327,18 +327,18 @@ function cmdDot(ctx: Ctx, pathArg: string, customParts: string[], explicit: bool
   const prefix = spacePrefix(ctx.root, space, ctx.prefix);
   const spaceDir = ctx.root.spacePath(space);
   const name = `${prefix}${versionedBase(spaceDir, prefix, base)}`;
-  const { path: entryPath } = createEntry(ctx.root, space, name);
+  const { path: workspacePath } = createWorkspace(ctx.root, space, name);
   const isRepo = existsSync(repoDir) && gitTry(repoDir, ["rev-parse", "--show-toplevel"]) !== undefined;
   if (!isRepo) {
-    visit(ctx, entryPath);
+    visit(ctx, workspacePath);
     return 0;
   }
-  info(`Using git worktree to create this entry from ${repoDir}.`);
+  info(`Using git worktree to create this workspace from ${repoDir}.`);
   try {
-    const checkout = addRepo(ctx.root, entryPath, { lane: DEFAULT_LANE, spec: repoDir, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(space).post_add });
-    visit(ctx, entryPath, checkout);
+    const worktree = addRepo(ctx.root, workspacePath, { lane: DEFAULT_LANE, spec: repoDir, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(space).post_add });
+    visit(ctx, workspacePath, worktree);
   } catch (e) {
-    removeTree(ctx.root, entryPath);
+    removeTree(ctx.root, workspacePath);
     throw e;
   }
   return 0;
@@ -347,13 +347,13 @@ function cmdDot(ctx: Ctx, pathArg: string, customParts: string[], explicit: bool
 function cmdPath(ctx: Ctx, args: string[]): number {
   const [query, lane] = args;
   if (!query) fail("usage: work path <query> [lane]");
-  const entry = resolveEntry(ctx.root, query, ctx.cwd, { space: ctx.space, first: ctx.first });
-  let path = entry.path;
+  const workspace = resolveWorkspace(ctx.root, query, ctx.cwd, { space: ctx.space, first: ctx.first });
+  let path = workspace.path;
   if (lane) {
-    path = join(entry.path, lane);
-    if (!existsSync(path)) fail(`no lane ${lane} in ${entry.space}/${entry.name}`);
+    path = join(workspace.path, lane);
+    if (!existsSync(path)) fail(`no lane ${lane} in ${workspace.space}/${workspace.name}`);
   }
-  out(ctx.json ? JSON.stringify({ space: entry.space, name: entry.name, path }) : path);
+  out(ctx.json ? JSON.stringify({ space: workspace.space, name: workspace.name, path }) : path);
   return 0;
 }
 
@@ -361,7 +361,7 @@ function cmdLs(ctx: Ctx): number {
   const visits = ctx.history.lastVisits();
   const now = Date.now();
   const archived = ctx.flags.has("--archived");
-  const list = (archived ? ctx.root.archived(ctx.space) : ctx.space ? ctx.root.entries(ctx.space) : ctx.root.allEntries())
+  const list = (archived ? ctx.root.archived(ctx.space) : ctx.space ? ctx.root.workspaces(ctx.space) : ctx.root.allWorkspaces())
     .map((e) => {
       const recency = visits.get(e.path) ?? e.mtime;
       const days = staleDays(ctx, e.space) ?? (ctx.flags.has("--stale") ? 30 : undefined);
@@ -393,32 +393,32 @@ function cmdLs(ctx: Ctx): number {
 }
 
 function cmdInfo(ctx: Ctx, args: string[]): number {
-  const entry = resolveEntry(ctx.root, args[0] ?? ".", ctx.cwd, { space: ctx.space, first: ctx.first });
-  const model = loadModel(entry.path);
+  const workspace = resolveWorkspace(ctx.root, args[0] ?? ".", ctx.cwd, { space: ctx.space, first: ctx.first });
+  const model = loadModel(workspace.path);
   const lanes = topoLanes(model).map((name) => {
     const l = model.lanes[name]!;
     return {
       name,
       branch: l.branch,
       parent: l.parent,
-      path: join(entry.path, name),
+      path: join(workspace.path, name),
       repos: Object.entries(l.repos).map(([repo, rec]) => {
-        const checkout = join(entry.path, name, repo);
-        const exists = existsSync(checkout);
-        const st = exists ? checkoutStatus(checkout) : undefined;
+        const worktree = join(workspace.path, name, repo);
+        const exists = existsSync(worktree);
+        const st = exists ? worktreeStatus(worktree) : undefined;
         let parentRef: string | undefined;
         let ahead: number | undefined;
         let behind: number | undefined;
         try {
           parentRef = parentRefOf(model, name, repo).ref;
-          const counts = gitTry(checkout, ["rev-list", "--left-right", "--count", `${parentRef}...${repoBranch(l, repo)}`]);
+          const counts = gitTry(worktree, ["rev-list", "--left-right", "--count", `${parentRef}...${repoBranch(l, repo)}`]);
           if (counts) [behind, ahead] = counts.split(/\s+/).map(Number);
         } catch {
           // source gone
         }
         return {
           repo,
-          path: checkout,
+          path: worktree,
           exists,
           branch: repoBranch(l, repo),
           checkedOut: st?.branch,
@@ -436,12 +436,12 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
       }),
     };
   });
-  const data = { space: entry.space, name: entry.name, path: entry.path, lanes, sync: model.sync };
+  const data = { space: workspace.space, name: workspace.name, path: workspace.path, lanes, sync: model.sync };
   if (ctx.json) {
     out(JSON.stringify(data, null, 2));
     return 0;
   }
-  out(`${entry.space}/${entry.name}  ${entry.path}`);
+  out(`${workspace.space}/${workspace.name}  ${workspace.path}`);
   if (!lanes.length) out("  (no lanes — `work add <repo>` creates lane root)");
   for (const l of lanes) {
     out(`  ${l.name}/  ${l.branch}  on ${l.parent ?? "trunk"}`);
@@ -464,30 +464,30 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
 function cmdAdd(ctx: Ctx, args: string[]): number {
   const [spec, branch] = args;
   if (!spec) fail("usage: work add <repo|url|path> [branch] [--lane L]");
-  const { entry, rest } = currentEntry(ctx);
-  const model = loadModel(entry.path);
+  const { workspace, rest } = currentWorkspace(ctx);
+  const model = loadModel(workspace.path);
   const current = laneOfCwd(model, rest);
   const lane = ctx.lane ?? current ?? DEFAULT_LANE;
   const parent = model.lanes[lane] ? undefined : ctx.on === "trunk" ? null : (ctx.on ?? (lane === DEFAULT_LANE ? null : (current ?? null)));
-  const checkout = addRepo(ctx.root, entry.path, {
+  const worktree = addRepo(ctx.root, workspace.path, {
     lane,
     spec,
     branch,
     cwd: ctx.cwd,
     parent,
-    postAdd: ctx.root.spaceConfig(entry.space).post_add,
+    postAdd: ctx.root.spaceConfig(workspace.space).post_add,
   });
-  out(ctx.json ? JSON.stringify({ lane, path: checkout }) : checkout);
+  out(ctx.json ? JSON.stringify({ lane, path: worktree }) : worktree);
   return 0;
 }
 
 function cmdLane(ctx: Ctx, args: string[]): number {
   const [name, ...repos] = args;
   if (!name) fail("usage: work lane <name> [repos…] [--on <lane>|trunk]");
-  const { entry, rest } = currentEntry(ctx);
-  const model = loadModel(entry.path);
+  const { workspace, rest } = currentWorkspace(ctx);
+  const model = loadModel(workspace.path);
   const parent = ctx.on === "trunk" ? null : (ctx.on ?? laneOfCwd(model, rest) ?? null);
-  const path = createLane(ctx.root, entry.path, { name, parent, repos, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(entry.space).post_add });
+  const path = createLane(ctx.root, workspace.path, { name, parent, repos, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(workspace.space).post_add });
   ctx.emit.cd(path);
   if (ctx.json) out(JSON.stringify({ lane: name, parent, path }));
   else if (ctx.emit.mode === "file") info(`Lane ${name} on ${parent ?? "trunk"}: ${path}`);
@@ -495,30 +495,30 @@ function cmdLane(ctx: Ctx, args: string[]): number {
 }
 
 function cmdMv(ctx: Ctx, args: string[]): number {
-  if (!args.length || args.length > 2) fail("usage: work mv [entry] <space>[/<name>] [--prefix P]");
+  if (!args.length || args.length > 2) fail("usage: work mv [workspace] <space>[/<name>] [--prefix P]");
   const [source, target] = args.length === 2 ? args : [".", args[0]!];
-  const entry = resolveEntry(ctx.root, source!, ctx.cwd, { first: ctx.first });
-  const t = parseMoveTarget(ctx.root, entry, target!, ctx.prefix);
-  const moved = moveEntry(ctx.root, entry, t, ctx.history, ctx.cwd);
-  info(`Moved ${entry.space}/${entry.name} → ${t.space}/${t.name}`);
+  const workspace = resolveWorkspace(ctx.root, source!, ctx.cwd, { first: ctx.first });
+  const t = parseMoveTarget(ctx.root, workspace, target!, ctx.prefix);
+  const moved = moveWorkspace(ctx.root, workspace, t, ctx.history, ctx.cwd);
+  info(`Moved ${workspace.space}/${workspace.name} → ${t.space}/${t.name}`);
   if (moved.cd) ctx.emit.cd(moved.cd);
-  if (ctx.json) out(JSON.stringify({ from: entry.path, path: moved.path }));
+  if (ctx.json) out(JSON.stringify({ from: workspace.path, path: moved.path }));
   else if (!moved.cd) out(moved.path); // with a cd the target is emitted instead
   return 0;
 }
 
 function cmdArchive(ctx: Ctx, args: string[]): number {
-  const entry = resolveEntry(ctx.root, args[0] ?? ".", ctx.cwd, { first: ctx.first });
-  const res = archiveEntry(ctx.root, entry, ctx.history, ctx.cwd);
-  info(`Archived ${entry.space}/${entry.name}`);
+  const workspace = resolveWorkspace(ctx.root, args[0] ?? ".", ctx.cwd, { first: ctx.first });
+  const res = archiveWorkspace(ctx.root, workspace, ctx.history, ctx.cwd);
+  info(`Archived ${workspace.space}/${workspace.name}`);
   if (res.cd) ctx.emit.cd(res.cd);
   if (ctx.json) out(JSON.stringify({ path: res.path }));
   return 0;
 }
 
 function cmdUnarchive(ctx: Ctx, args: string[]): number {
-  if (!args[0]) fail("usage: work unarchive <entry>");
-  const path = unarchiveEntry(ctx.root, args[0], ctx.history);
+  if (!args[0]) fail("usage: work unarchive <workspace>");
+  const path = unarchiveWorkspace(ctx.root, args[0], ctx.history);
   info(`Restored ${path}`);
   out(ctx.json ? JSON.stringify({ path }) : path);
   return 0;
@@ -526,53 +526,53 @@ function cmdUnarchive(ctx: Ctx, args: string[]): number {
 
 function cmdRm(ctx: Ctx, args: string[]): number {
   const target = args[0];
-  if (!target) fail("usage: work rm <entry>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]");
+  if (!target) fail("usage: work rm <workspace>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]");
   const parts = target.split("/").filter(Boolean);
-  let entry: EntryInfo;
+  let workspace: WorkspaceInfo;
   let rest: string[];
   if (target === "." || parts[0] === ".") {
-    entry = currentEntry(ctx).entry;
+    workspace = currentWorkspace(ctx).workspace;
     rest = parts.slice(1);
   } else if (parts.length >= 2 && ctx.root.spaces().includes(parts[0]!) && existsSync(join(ctx.root.path, parts[0]!, parts[1]!))) {
-    entry = resolveEntry(ctx.root, `${parts[0]}/${parts[1]}`, ctx.cwd);
+    workspace = resolveWorkspace(ctx.root, `${parts[0]}/${parts[1]}`, ctx.cwd);
     rest = parts.slice(2);
   } else {
-    entry = resolveEntry(ctx.root, parts[0]!, ctx.cwd, { space: ctx.space, first: ctx.first });
+    workspace = resolveWorkspace(ctx.root, parts[0]!, ctx.cwd, { space: ctx.space, first: ctx.first });
     rest = parts.slice(1);
   }
   if (rest.length > 2) fail(`too many path parts in ${target}`);
-  const dir = join(entry.path, ...rest);
+  const dir = join(workspace.path, ...rest);
   if (!existsSync(dir)) fail(`${dir} does not exist`);
   const warnings = removalWarnings(dir);
   if (warnings.length && !ctx.force) fail(`refusing to delete (use --force):\n${warnings.join("\n")}`);
-  const label = [`${entry.space}/${entry.name}`, ...rest].join("/");
+  const label = [`${workspace.space}/${workspace.name}`, ...rest].join("/");
   confirmYes(ctx, `Delete ${label}?`, warnings);
-  if (rest.length === 0) deleteEntries(ctx.root, [entry.path], { force: true });
-  else if (rest.length === 1) removeLane(ctx.root, entry.path, rest[0]!);
-  else removeRepo(ctx.root, entry.path, rest[0]!, rest[1]!);
+  if (rest.length === 0) deleteWorkspaces(ctx.root, [workspace.path], { force: true });
+  else if (rest.length === 1) removeLane(ctx.root, workspace.path, rest[0]!);
+  else removeRepo(ctx.root, workspace.path, rest[0]!, rest[1]!);
   info(`Deleted ${label}`);
   if (isInside(ctx.cwd, dir)) ctx.emit.cd(resolve(dir, ".."));
   return 0;
 }
 
 function cmdSync(ctx: Ctx): number {
-  const { entry } = currentEntry(ctx);
-  const reports = sync(ctx.root, entry.path, { continue: ctx.flags.has("--continue"), abort: ctx.flags.has("--abort") });
+  const { workspace } = currentWorkspace(ctx);
+  const reports = sync(ctx.root, workspace.path, { continue: ctx.flags.has("--continue"), abort: ctx.flags.has("--abort") });
   if (ctx.json) out(JSON.stringify(reports, null, 2));
   return 0;
 }
 
 function cmdSubmit(ctx: Ctx): number {
-  const { entry } = currentEntry(ctx);
-  const reports = submit(ctx.root, entry.path, { draft: ctx.flags.has("--draft") });
+  const { workspace } = currentWorkspace(ctx);
+  const reports = submit(ctx.root, workspace.path, { draft: ctx.flags.has("--draft") });
   if (ctx.json) out(JSON.stringify(reports, null, 2));
   return 0;
 }
 
 function cmdBack(ctx: Ctx): number {
   const loc = ctx.root.locate(ctx.cwd);
-  const prev = ctx.history.previous(loc?.entryPath);
-  if (!prev) fail("no previous entry");
+  const prev = ctx.history.previous(loc?.workspacePath);
+  if (!prev) fail("no previous workspace");
   visit(ctx, prev);
   return 0;
 }
