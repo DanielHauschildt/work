@@ -76,7 +76,6 @@ Usage:
   work new [--space S] [--prefix P] <name>   Create a workspace without the picker
   work - | work back               Previous workspace
   work . <name> | ./path [name]    New workspace with a worktree of that repo
-  work worktree dir|<path> [name]  Same (try compatible)
   work clone <url> [name] | <url>  New workspace with a worktree of <url>
   work path <query> [lane]         Print the path of a workspace (or lane)
   work ls [--space S] [--json] [--stale] [--archived]
@@ -363,11 +362,11 @@ function cmdClone(ctx: Ctx, args: string[]): number {
   return 0;
 }
 
-/** try's `.`, `./path` and `worktree dir|path`: new dated workspace, worktree of the repo in lane root. */
-function cmdDot(ctx: Ctx, pathArg: string, customParts: string[], explicit: boolean): number {
+/** try's `.` and `./path`: new dated workspace, worktree of the repo in lane root. */
+function cmdDot(ctx: Ctx, pathArg: string, customParts: string[]): number {
   const custom = customParts.join(" ").trim();
-  if (pathArg === "." && !custom && !explicit) fail("Error: 'work .' requires a name argument\nUsage: work . <name>");
-  const repoDir = pathArg === "dir" ? ctx.cwd : resolve(ctx.cwd, expandHome(pathArg));
+  if (pathArg === "." && !custom) fail("Error: 'work .' requires a name argument\nUsage: work . <name>");
+  const repoDir = resolve(ctx.cwd, expandHome(pathArg));
   const base = custom ? dashify(custom) : basename(repoDir);
   const space = ctx.space ?? DEFAULT_SPACE;
   const prefix = spacePrefix(ctx.root, space, ctx.prefix);
@@ -635,7 +634,7 @@ function cmdInit(ctx: Ctx, args: string[], pathFlag: string | undefined): number
 /** try's default command: `.`/`./path`, a git URL, or the picker. */
 async function defaultCommand(ctx: Ctx, args: string[]): Promise<number> {
   const first = args[0];
-  if (first?.startsWith(".")) return cmdDot(ctx, first, args.slice(1), false);
+  if (first?.startsWith(".")) return cmdDot(ctx, first, args.slice(1));
   if (isGitUri(first)) return cmdClone(ctx, [first!, args.slice(1).join(" ") || undefined].filter((x): x is string => x !== undefined));
   return picker(ctx, args.join(" "));
 }
@@ -735,8 +734,8 @@ export async function main(argv: string[]): Promise<number> {
       code = cmdClone(ctx, args);
       break;
     case "worktree":
-      code = cmdDot(ctx, args[0] ?? "dir", args.slice(1), true);
-      break;
+      // "worktree" means a repo folder in a lane; try's command of that name is covered by `.` / `./path`
+      fail("`work worktree` was removed; use `work . <name>` or `work ./path [name]`");
     case "path":
       code = cmdPath(ctx, args);
       break;

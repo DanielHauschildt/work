@@ -23,7 +23,6 @@ export const SUBCOMMANDS: Record<string, string> = {
   sync: "restack lanes onto their parents",
   submit: "push lanes and open/update PRs",
   clone: "new workspace from a git URL",
-  worktree: "new workspace with a worktree of a repo",
   back: "go to the previous workspace",
   init: "print shell integration",
   space: "list, create or configure spaces",
@@ -156,7 +155,6 @@ export function complete(root: Root, opts: { cmd: string; space?: string; words:
       return filter([{ value: "--continue" }, { value: "--abort" }, { value: "--json" }], cur);
     case "submit":
       return filter([{ value: "--draft" }, { value: "--json" }], cur);
-    case "worktree":
     case "init":
       return "files";
     default:

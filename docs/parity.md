@@ -26,10 +26,10 @@ test in `test/parity.test.ts` (differential against the installed try where the 
 | 19 | URL detection `^(https?://|git@)`, contains github.com/gitlab.com, ends `.git` | same | identical |
 | 20 | URL parsing github/gitlab/other https/ssh, `.git` stripped | same (+ file paths) | identical |
 | 21 | `try . <name>` (bare `.` requires a name), `try ./path [name]` → dated dir, worktree of that repo | same, worktree in `root/<repo>` on a named branch | changed (named branch, lane) |
-| 22 | `try worktree dir|<path> [name]` | `work worktree …` | changed like 21 |
+| 22 | `try worktree dir|<path> [name]` | removed (error): use `work ./path [name]` / `work . <name>` — "worktree" means a repo folder in a lane | removed |
 | 23 | worktree name versioning: `name` → `name2`/`-2` when today's dir exists | same | identical |
 | 24 | non-git dir with `.` → just mkdir + cd | same | identical |
-| 25 | `try exec [args]`, `exec cd|clone|worktree` → script on stdout with warning comment | `work exec …` | identical |
+| 25 | `try exec [args]`, `exec cd|clone|worktree` → script on stdout with warning comment | `work exec …` (no `exec worktree`, see 22) | identical |
 | 26 | `--path` anywhere (last wins), `TRY_PATH` env, default `~/src/tries` | `--path`, `WORK_ROOT`, default `~/Work` (root, not a tries folder — so `TRY_PATH` is not read) | changed |
 | 27 | `--help`/`-h` anywhere, `--version`/`-v` | same | identical |
 | 28 | no args to the binary → help, exit 2 | same | identical |
@@ -44,7 +44,7 @@ test in `test/parity.test.ts` (differential against the installed try where the 
 
 - `test/parity.test.ts`: differential runs of the installed `try` vs `work` (25 picker key scripts, render and
   `--and-type` screens, help/version/exit codes, non-TTY, clone naming incl. URL shorthand and custom names,
-  `.` / `./` / `worktree dir` incl. name versioning and non-repo folders).
+  `.` / `./` incl. name versioning and non-repo folders).
 - `test/tui/try-parity.test.ts`: screen comparisons against try at several terminal sizes (search line, list
   area, dialogs, frame count; the space-bar header, footer and create-row wording differ on purpose).
 - `test/e2e` (`bun run e2e`): real interactive zsh and bash sessions (expect, compiled binary): completion of shortcut

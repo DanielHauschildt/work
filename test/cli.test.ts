@@ -126,7 +126,14 @@ describe("repos", () => {
     // second time: versioned name like try
     expect(work([".", "exp"], { cwd: repo }).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-exp-2`, "root", "seed-app"));
     // outside a repo: just a folder
-    expect(work(["worktree", sb.remotes, "plain"]).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-plain`));
+    expect(work(["./remotes", "plain"]).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-plain`));
+    // try's `worktree` command is gone ("worktree" is a repo folder in a lane)
+    for (const args of [["worktree", "dir", "x"], ["exec", "worktree", "dir"]]) {
+      const removed = work(args, { cwd: repo });
+      expect(removed.code).toBe(1);
+      expect(removed.stderr).toContain("`work worktree` was removed; use `work . <name>` or `work ./path [name]`");
+    }
+    expect(existsSync(join(sb.root, "tries", `${TODAY}-x`))).toBe(false);
     void app;
   });
 

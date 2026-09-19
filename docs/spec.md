@@ -76,7 +76,6 @@ work [--space S] [query]         picker (all spaces, or S); with --prefix/name c
 work new [--space S] [--prefix P] <name>    create without picker (agents), prints path / emits cd
 work - | back                    cd to previous workspace (history)
 work . <name> | ./path [name]    new workspace; if the path is a git repo, a worktree of it in lane root
-work worktree <dir|path> [name]  try-compat form of the above
 work clone <url> [name] | <url>  new workspace `<prefix>-<owner>-<repo>`; store + worktree in lane root
 work path <query> [lane]         print absolute path of the unique best match (exit 1 if none/ambiguous)
 work ls [--space S] [--json] [--stale]

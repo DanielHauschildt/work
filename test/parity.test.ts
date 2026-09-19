@@ -261,7 +261,7 @@ d("command parity", () => {
     expect(t0.code).toBe(1);
     expect(w0.code).toBe(1);
     expect(w0.stderr).toContain("requires a name argument");
-    for (const args of [[".", "exp"], [".", "exp"], [".", "v1"], [".", "v1"], ["./", "other name"], ["worktree", "dir", "wt"]]) {
+    for (const args of [[".", "exp"], [".", "exp"], [".", "v1"], [".", "v1"], ["./", "other name"]]) {
       evalTry(runTry(["exec", ...args], repo), repo);
       runWork(["exec", ...args], repo);
       expect(listing(join(workRoot, "tries"))).toEqual(listing(tryDir));
