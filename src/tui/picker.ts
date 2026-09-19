@@ -318,13 +318,25 @@ class Picker {
     // Filter only if searching, otherwise show all
     const rows = (rest === "" ? scored : scored.filter((r) => r.score > 0)).sort((a, b) => b.score - a.score);
 
-    const isNewSpace = !this.spaceExists(target);
-    const creates =
-      rest === "" || rest.includes("/")
-        ? []
-        : this.createOptions(target).map((option) => ({ space: target, option, isNewSpace }));
+    const creates = rest === "" || rest.includes("/") ? [] : this.createRows(target, listSpace === null);
 
     return { rows, creates, target, rest, showSpace: listSpace !== this.scope };
+  }
+
+  /**
+   * Create rows. One space: a row per create option. All spaces: a row per space with its default option,
+   * `target` (the default space, Ctrl-T) first, then the other spaces alphabetically.
+   */
+  private createRows(target: string, everySpace: boolean): CreateRow[] {
+    if (!everySpace) {
+      const isNewSpace = !this.spaceExists(target);
+      return this.createOptions(target).map((option) => ({ space: target, option, isNewSpace }));
+    }
+    const others = this.scopes.filter((s) => s !== "*" && s !== target).sort();
+    return [target, ...others].flatMap((space) => {
+      const option = this.createOptions(space)[0];
+      return option ? [{ space, option, isNewSpace: !this.spaceExists(space) }] : [];
+    });
   }
 
   private startDirtyCheck(item: PickerItem): void {
@@ -592,8 +604,8 @@ class Picker {
     if (this.scope === NEW_TAB) ui.puts(`  {dim}${this.newSpaceHint()}{/fg}`);
 
     for (let idx = this.scrollOffset; idx < visibleEnd; idx++) {
-      // Add blank line before the create rows
-      if (idx === tries.length && tries.length > 0 && idx >= this.scrollOffset) ui.puts();
+      // Add blank line before the create rows; not while scrolling, a full window has no room for it
+      if (idx === tries.length && tries.length > 0 && totalItems <= maxVisible) ui.puts();
 
       const isSelected = idx === this.cursorPos;
       ui.print(isSelected ? "{b}→ {/b}" : "  ");

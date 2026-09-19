@@ -229,6 +229,151 @@ describe("create", () => {
   });
 });
 
+describe("all-scope create rows", () => {
+  const scopes = ["*", "alpha", "labs", "tries", "zeta"];
+  const options = (space: string): CreateOption[] => {
+    switch (space) {
+      case "tries":
+        return TWO_OPTIONS();
+      case "labs":
+        return [
+          { prefix: "IMG-1-", label: "" },
+          { prefix: "", label: "no date" },
+        ];
+      case "alpha":
+        return [
+          { prefix: "", label: "plain" },
+          { prefix: DATE, label: "date" },
+        ];
+      default:
+        return [];
+    }
+  };
+  const allScope = (keys: string[], extra: Partial<PickerOptions> = {}) =>
+    pick({ ...base(), scopes, scope: "*", defaultSpace: "tries", createOptions: options, test: { keys }, ...extra });
+
+  test("one row per space with its default option: default space first, then alphabetical", async () => {
+    const { result, out } = await allScope([..."qqq", "\x1b[B", "\x1b[B", "\r"]);
+    expect(result).toEqual({ type: "mkdir", space: "labs", name: "IMG-1-qqq" });
+    const list = frames(out)[3]!.split("\n").slice(4, -3);
+    expect(list).toEqual([
+      `→ 📂 New tries/${DATE}qqq`,
+      `  📂 New alpha/qqq${" ".repeat(80 - 1 - 5 - 5 - 13)}plain`,
+      "  📂 New labs/IMG-1-qqq",
+    ]);
+    // zeta has no create options; the alternate variants are not offered here
+    expect(plain(out)).not.toContain("zeta/");
+    expect(plain(out)).not.toContain("no date");
+  });
+
+  test("Ctrl-T creates in the default space", async () => {
+    const { result } = await allScope([..."qqq", "\x1b[B", "\x14"]);
+    expect(result).toEqual({ type: "mkdir", space: "tries", name: `${DATE}qqq` });
+  });
+
+  test("rows follow the matches", async () => {
+    const { out } = await allScope([..."auto"]);
+    const list = frames(out).at(-1)!.split("\n").slice(4, -3);
+    expect(list[0]).toContain("labs/IMG-1234-autofit");
+    expect(list.slice(1)).toEqual([`  📂 New tries/${DATE}auto`, expect.stringContaining("New alpha/auto"), "  📂 New labs/IMG-1-auto"]);
+  });
+
+  test("a single-space tab keeps both variants", async () => {
+    const { out } = await allScope([..."qqq"], { scope: "labs" });
+    const list = frames(out).at(-1)!.split("\n").slice(4, -3);
+    expect(list).toEqual(["→ 📂 New labs/IMG-1-qqq", expect.stringMatching(/^ {2}📂 New labs\/qqq +no date$/)]);
+  });
+
+  test("`space/rest` keeps rows for that space only", async () => {
+    const { out } = await allScope([..."labs/qqq"]);
+    const list = frames(out).at(-1)!.split("\n").slice(4, -3);
+    expect(list).toEqual(["→ 📂 New labs/IMG-1-qqq", expect.stringMatching(/^ {2}📂 New labs\/qqq +no date$/)]);
+  });
+
+  test("the default space is marked (new space) when missing; the others are not", async () => {
+    const { out } = await allScope([..."qqq"], { defaultSpace: "ideas", createOptions: () => [{ prefix: "", label: "" }] });
+    const list = frames(out).at(-1)!.split("\n").slice(4, -3);
+    expect(list).toEqual([
+      expect.stringMatching(/^→ 📂 New ideas\/qqq +\(new space\)$/),
+      "  📂 New alpha/qqq",
+      "  📂 New labs/qqq",
+      "  📂 New tries/qqq",
+      "  📂 New zeta/qqq",
+    ]);
+  });
+});
+
+describe("many spaces", () => {
+  const spaces = Array.from({ length: 30 }, (_, i) => `s${String(i + 1).padStart(2, "0")}`);
+  const order = ["s15", ...spaces.filter((s) => s !== "s15")];
+  const run = (keys: string[], extra: Partial<PickerOptions> = {}) =>
+    pick({
+      ...base(),
+      items: [],
+      scopes: ["*", ...spaces],
+      scope: "*",
+      defaultSpace: "s15",
+      createOptions: () => [{ prefix: "", label: "" }],
+      test: { keys },
+      ...extra,
+    });
+
+  test("cursor and scroll window move through the create rows", async () => {
+    const down = (n: number) => Array(n).fill("\x1b[B");
+    const { result, out } = await run([..."new", ...down(20), "\r"]);
+    expect(result).toEqual({ type: "mkdir", space: order[20]!, name: "new" });
+    const f = frames(out);
+    for (const frame of f) expect(frame.match(/→ /g)?.length ?? 0).toBeLessThanOrEqual(1);
+    const last = f.at(-1)!;
+    // window of 16 rows ending at the cursor (row 21 of 30)
+    expect(last).toContain("[6-21/30]");
+    const rows = last.split("\n").filter((l) => l.includes("📂"));
+    expect(rows).toHaveLength(16);
+    expect(rows[0]).toBe(`  📂 New ${order[5]}/new`);
+    expect(rows[15]).toBe(`→ 📂 New ${order[20]}/new`);
+  });
+
+  test("cursor stops at the last row", async () => {
+    const { result, out } = await run([..."new", ...Array(40).fill("\x1b[B"), "\r"]);
+    expect(result).toEqual({ type: "mkdir", space: "s30", name: "new" });
+    expect(frames(out).at(-1)).toContain("[15-30/30]");
+  });
+
+  test("a scrolled frame never goes past the terminal height", async () => {
+    const err = capture(true);
+    const list = Array.from({ length: 10 }, (_, i) => item("tries", `item-${i}`, 1 + i));
+    await runPicker({
+      ...base(),
+      items: list,
+      scopes: ["*", "tries", ...spaces],
+      scope: "*",
+      defaultSpace: "tries",
+      createOptions: () => [{ prefix: "", label: "" }],
+      addSpace: () => {},
+      stderr: err.stream,
+      test: { keys: [..."item", ...Array(12).fill("\x1b[B")] },
+    });
+    const rowsUsed = [...err.text().matchAll(/\x1b\[(\d+);1H/g)].map((m) => Number(m[1]));
+    expect(rowsUsed.length).toBeGreaterThan(0);
+    expect(Math.max(...rowsUsed)).toBeLessThanOrEqual(24);
+  });
+
+  test("without scrolling the blank line before the create rows stays", async () => {
+    const err = capture(true);
+    await runPicker({
+      ...base(),
+      scope: "tries",
+      defaultSpace: "tries",
+      createOptions: TWO_OPTIONS,
+      addSpace: () => {},
+      stderr: err.stream,
+      test: { keys: [..."vec"] },
+    });
+    // rows 1-4 header/search, 5 = the match, 6 = blank, 7-8 = create rows
+    expect(err.text()).toContain("\x1b[6;1H\x1b[2K\x1b[7;1H\x1b[2K  📂 ");
+  });
+});
+
 describe("new space from a create row", () => {
   function newSpaceRun(keys: string[], extra: Partial<PickerOptions> = {}) {
     const calls: Array<[string, string]> = [];
@@ -252,14 +397,16 @@ describe("new space from a create row", () => {
     expect(result).toEqual({ type: "mkdir", space: "ideas", name: `${DATE}foo` });
     expect(calls).toEqual([["ideas", "auto"]]);
     const p = plain(out);
-    expect(p).toMatch(/→ 📂 New ideas\/\d{4}-\d{2}-\d{2}-foo +\(new space\)\n/);
-    expect(p).toMatch(/ {2}📂 New ideas\/foo +\(new space\) {2}no date\n/);
+    // all scope: the default space first (marked), then the existing spaces
+    expect(p).toMatch(/→ 📂 New ideas\/\d{4}-\d{2}-\d{2}-foo +\(new space\)\n {2}📂 New labs\/\S+foo\n {2}📂 New tries\/\S+foo\n/);
     expect(p).toContain(`New space "ideas" — default for new workspaces:\n→ date      (${DATE}name)\n  no date   (name)\n↑↓ Enter  Esc Back\n`);
   });
 
   test("preselects no date for a row without prefix; the choice can be changed", async () => {
-    const { calls, run } = newSpaceRun([..."foo", "\x1b[B", "\r", "\x1b[A", "\r"]);
+    // `ideas/` shows both options of the (new) space
+    const { calls, run } = newSpaceRun([..."ideas/foo", "\x1b[B", "\r", "\x1b[A", "\r"]);
     const { result, out } = await run;
+    expect(plain(out)).toMatch(/ {2}📂 New ideas\/foo +\(new space\) {2}no date\n/);
     expect(plain(out)).toContain("  date      (");
     expect(plain(out)).toContain("→ no date   (name)");
     expect(calls).toEqual([["ideas", "auto"]]);
@@ -274,7 +421,7 @@ describe("new space from a create row", () => {
   });
 
   test("Esc on the choice screen goes back to the list", async () => {
-    const { calls, run } = newSpaceRun([..."foo", "\x14", "\x1b", "\x1b[B", "\r"]);
+    const { calls, run } = newSpaceRun([..."ideas/foo", "\x14", "\x1b", "\x1b[B", "\r"]);
     const { result } = await run;
     expect(calls).toEqual([]);
     // back in the list (cursor kept), the choice screen came up again for the second row
