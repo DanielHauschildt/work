@@ -25,14 +25,16 @@ description: Use when working inside a `work` workspace (a folder under ~/Work/<
 |---|---|
 | Where am I / state of all lanes | `work info --json` |
 | Create a workspace | `work new --space labs --prefix IMG-1234 autofit` → prints its path |
-| Find a workspace | `work path <query> [folder]` (folder = `<repo>[@<lane>]`; `--first` for the best fuzzy match), `work ls --json` |
+| Find a workspace | `work path <query> [folder]` (folder = `<repo>[@<lane>]`; `--first` for the best fuzzy match) |
+| List workspaces | `work ls --json [--space S] [--stale] [--archived]` (stale = not visited for the space's `cleanup_days`) |
 | Add a repo to the current lane | `work add <owner/repo|url|path|store-name> [branch]` → prints the path of `<repo>[@<lane>]` |
 | Start a stacked feature | `work lane <name> [repos…] --on <parent-lane|trunk>` → prints the new worktree paths |
 | Restack after a parent changed | `work sync` (conflict: fix in the printed worktree, `git add`, `work sync --continue`; or `--abort`) |
 | Push + open/update stacked PRs | `work submit [--draft]` (one PR per repo and lane, base = parent lane branch) |
 | Move / promote | `work mv <workspace> labs[/<name>] [--prefix P]` |
+| Park / bring back a workspace | `work archive [workspace]` → `<space>/.archive/<workspace>`, `work unarchive <workspace>` |
 | Remove a finished lane | `work rm ./<lane> --yes` (all its worktrees) or `work rm ./<repo>@<lane> --yes` (one; a folder of that name wins over a lane of that name); branches are kept |
-| Workspace still has `<lane>/<repo>` folders | `work migrate [--force]` — writing commands refuse it until then |
+| Workspace still has `<lane>/<repo>` folders | `work migrate` (or `work migrate --all`) — `add`, `lane`, `rm` of a lane, `sync` and `submit` refuse it until then |
 
 A lane without explicit repos inherits the repos of its parent lane (with no repos it gets no folder). The current
 lane comes from the cwd's folder suffix (`docs@ui` → lane `ui`, no suffix → lane `root`). A merged parent PR is
