@@ -141,6 +141,7 @@ shell wrapper sources a temp file so normal stdout (e.g. `work ls --json | jq`) 
 bun test          # unit, git integration, CLI end-to-end, differential parity vs. installed try
 bun run typecheck
 bun run e2e       # real zsh + bash sessions via expect (test/e2e), compiled binary
+bun run repro     # end-to-end checks for the bugs found in review (test/repro)
 ```
 
 Spec: [docs/spec.md](docs/spec.md).

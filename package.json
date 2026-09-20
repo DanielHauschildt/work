@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit -p .",
     "build": "bun build --compile --minify src/cli.ts --outfile dist/work",
     "e2e": "bun run build && test/e2e/run.sh",
+    "repro": "test/repro/run-all.sh",
     "install-local": "bun run build && install -m 755 dist/work \"${WORK_BIN_DIR:-$HOME/.local/bin}/work\""
   }
 }
