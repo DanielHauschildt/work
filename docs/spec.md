@@ -53,11 +53,11 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
   `root`). A lane with no repos has no folder at all.
 - `work migrate` converts older `<lane>/<repo>` folders to `<repo>[@<lane>]` with `git worktree move` (a plain
   legacy repo is renamed), deletes the emptied lane folders, rewrites `.work.json` and `AGENTS.md`, and follows the
-  cwd into the moved worktree. Everything is checked first: one dirty, unpushed or rebasing worktree refuses the
-  whole workspace and moves nothing (`--force` skips the check), and a lane folder that still holds other files is
-  kept (`--force` deletes it). Until a workspace is converted, `info`, the picker rows, `rm` of one worktree and
-  `path <query> <lane>` still find the old folder, while `add`, `lane`, `rm` of a lane, `sync` and `submit` refuse
-  it with "run `work migrate` first".
+  cwd into the moved worktree. Everything is checked first: one worktree with uncommitted changes or a rebase in
+  progress refuses the whole workspace and moves nothing (`--force` skips the check), and a lane folder that still
+  holds other files is kept (`--force` deletes it). Until a workspace is converted, `info`, the picker rows, `rm`
+  of one worktree and `path <query> <lane>` still find the old folder, while `add`, `lane`, `rm` of a lane, `sync`
+  and `submit` refuse it with "run `work migrate` first".
 
 ## Shell integration
 

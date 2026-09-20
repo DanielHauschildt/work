@@ -28,7 +28,9 @@ export function workspaceAgentsBody(workspaceName: string, space: string, model:
     const folders = repos.map((r) => `\`${worktreeDir(name, r)}/\`${repoBranch(l, r) === l.branch ? "" : ` (${repoBranch(l, r)})`}`);
     return `| \`${name}\` | \`${l.branch}\` | ${l.parent ?? "trunk"} | ${folders.join(", ") || "–"} |`;
   });
-  const example = lanes.flatMap((name) => Object.keys(model.lanes[name]!.repos).map((r) => worktreeDir(name, r)))[0];
+  // prefer a stacked lane's folder: it shows the @suffix the rule is about
+  const folders = lanes.flatMap((name) => Object.keys(model.lanes[name]!.repos).map((r) => worktreeDir(name, r)));
+  const example = folders.find((f) => f.includes("@")) ?? folders[0];
   return [
     `# Workspace \`${workspaceName}\` (space \`${space}\`)`,
     "",
