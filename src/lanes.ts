@@ -100,7 +100,7 @@ export interface LaneOptions {
 /** Create a lane; without explicit repos it inherits the parent lane's repos. Returns the new worktrees. */
 export function createLane(root: Root, workspacePath: string, opts: LaneOptions): string[] {
   const specs = withWorkspace(root, workspacePath, (model) => {
-    if (model.lanes[opts.name]) fail(`lane ${opts.name} already exists`);
+    if (model.lanes[opts.name]) fail(laneExists(model, opts));
     ensureLaneRec(model, workspacePath, opts.name, opts.parent);
     if (opts.repos.length) return opts.repos;
     const parent = opts.parent ? model.lanes[opts.parent] : undefined;
@@ -151,6 +151,19 @@ export function requireFlatLayout(workspacePath: string, model: WorkspaceModel):
   const old = legacyLanes(workspacePath, model);
   if (!old.length) return;
   fail(`${workspacePath} still uses lane folders (${old.join(", ")}): run \`work migrate\` for this workspace, or \`work migrate --all\` for every workspace`);
+}
+
+/** `work lane <name>` on an existing lane: say what it has, and how to complete or drop a half-created one. */
+function laneExists(model: WorkspaceModel, opts: LaneOptions): string {
+  const have = Object.keys(model.lanes[opts.name]!.repos);
+  const wanted = opts.repos.length ? opts.repos.map((s) => basename(s, ".git")) : Object.keys(model.lanes[opts.parent ?? ""]?.repos ?? {});
+  const missing = wanted.filter((r) => !have.includes(r));
+  if (!missing.length) return `lane ${opts.name} already exists`;
+  const add = missing.length === 1 ? `\`work add ${missing[0]} --lane ${opts.name}\`` : missing.map((r) => `\`work add ${r} --lane ${opts.name}\``).join(" and ");
+  return (
+    `lane ${opts.name} already exists with ${have.length} of ${have.length + missing.length} worktrees: ` +
+    `add the rest with ${add}, or drop the lane with \`work rm ./${opts.name}\``
+  );
 }
 
 export interface RemovalCheck {

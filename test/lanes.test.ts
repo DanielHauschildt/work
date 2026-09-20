@@ -160,6 +160,10 @@ describe("lanes", () => {
     );
     expect(Object.keys(loadModel(workspace).lanes.mixed!.repos)).toEqual(["app"]);
     expect(existsSync(join(workspace, "app@mixed"))).toBe(true);
+    // running the same command again says the same two ways out, with the missing repo named
+    expect(() => createLane(root, workspace, { name: "mixed", parent: "root", repos: [], cwd: sb.dir })).toThrow(
+      "lane mixed already exists with 1 of 2 worktrees: add the rest with `work add docs --lane mixed`, or drop the lane with `work rm ./mixed`",
+    );
   });
 
   test("same branch twice is rejected with a hint", () => {
