@@ -107,10 +107,10 @@ describe("repos", () => {
     const r = work(["clone", app], { wrapper: true });
     expect(r.code).toBe(0);
     const workspace = join(sb.root, "tries", `${TODAY}-remotes-app`);
-    expect(r.emitted).toBe(`cd '${join(workspace, "root", "app")}'\n`);
-    expect(g(join(workspace, "root", "app"), "branch", "--show-current")).toBe("remotes-app");
+    expect(r.emitted).toBe(`cd '${join(workspace, "app")}'\n`);
+    expect(g(join(workspace, "app"), "branch", "--show-current")).toBe("remotes-app");
     const r2 = work([app, "custom"]);
-    expect(r2.stdout.trim()).toBe(join(sb.root, "tries", "custom", "root", "app"));
+    expect(r2.stdout.trim()).toBe(join(sb.root, "tries", "custom", "app"));
   });
 
   test("`.` requires a name; creates a worktree of the current repo on a named branch", () => {
@@ -120,14 +120,14 @@ describe("repos", () => {
     expect(bare.code).toBe(1);
     expect(bare.stderr).toContain("'work .' requires a name argument");
     const r = work([".", "exp"], { cwd: repo });
-    const worktree = join(sb.root, "tries", `${TODAY}-exp`, "root", "seed-app");
+    const worktree = join(sb.root, "tries", `${TODAY}-exp`, "seed-app");
     expect(r.stdout.trim()).toBe(worktree);
     expect(g(worktree, "branch", "--show-current")).toBe("exp");
     // second time: versioned name like try
-    expect(work([".", "exp"], { cwd: repo }).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-exp-2`, "root", "seed-app"));
+    expect(work([".", "exp"], { cwd: repo }).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-exp-2`, "seed-app"));
     // outside a repo: just a folder
     expect(work(["./remotes", "plain"]).stdout.trim()).toBe(join(sb.root, "tries", `${TODAY}-plain`));
-    // try's `worktree` command is gone ("worktree" is a repo folder in a lane)
+    // try's `worktree` command is gone ("worktree" is a repo folder of a lane)
     for (const args of [["worktree", "dir", "x"], ["exec", "worktree", "dir"]]) {
       const removed = work(args, { cwd: repo });
       expect(removed.code).toBe(1);
@@ -141,22 +141,26 @@ describe("repos", () => {
     const app = makeRemote(sb, "app");
     const workspace = work(["new", "--space", "labs", "--prefix", "IMG-9", "feat"]).stdout.trim();
     const worktree = work(["add", app], { cwd: workspace }).stdout.trim();
-    expect(worktree).toBe(join(workspace, "root", "app"));
+    expect(worktree).toBe(join(workspace, "app"));
     commit(worktree, "x.txt", "x");
     const lane = work(["lane", "ui"], { cwd: worktree, wrapper: true });
     expect(lane.code).toBe(0);
-    expect(lane.emitted).toBe(`cd '${join(workspace, "ui")}'\n`);
-    const infoJson = JSON.parse(work(["info", "--json"], { cwd: join(workspace, "ui") }).stdout);
+    expect(lane.emitted).toBe(`cd '${join(workspace, "app@ui")}'\n`);
+    const infoJson = JSON.parse(work(["info", "--json"], { cwd: join(workspace, "app@ui") }).stdout);
     expect(infoJson.lanes.map((l: { name: string; parent: string | null; branch: string }) => [l.name, l.parent, l.branch])).toEqual([
       ["root", null, "IMG-9-feat"],
       ["ui", "root", "IMG-9-feat-ui"],
     ]);
-    expect(infoJson.lanes[1].repos[0]).toMatchObject({ repo: "app", ahead: 0, behind: 0, dirty: false });
-    // lane on trunk explicitly
-    work(["lane", "docs", "--on", "trunk", "app"], { cwd: workspace });
+    expect(infoJson.lanes[1].repos[0]).toMatchObject({ repo: "app", folder: "app@ui", ahead: 0, behind: 0, dirty: false });
+    // lane on trunk explicitly; the new lane's worktrees are printed and cd'd into
+    const docs = work(["lane", "docs", "--on", "trunk", "app"], { cwd: workspace });
+    expect(docs.stdout.trim()).toBe(join(workspace, "app@docs"));
     const again = JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout);
     expect(again.lanes.find((l: { name: string }) => l.name === "docs").parent).toBeNull();
-    expect(readFileSync(join(workspace, "ui", "AGENTS.md"), "utf8")).toContain("Branch: `IMG-9-feat-ui`");
+    // one AGENTS.md for the whole workspace; worktrees stay clean
+    expect(readFileSync(join(workspace, "AGENTS.md"), "utf8")).toContain("| `ui` | `IMG-9-feat-ui` | root | `app@ui/` |");
+    expect(existsSync(join(workspace, "app@ui", "AGENTS.md"))).toBe(false);
+    expect(g(join(workspace, "app@ui"), "status", "--porcelain")).toBe("");
   });
 
   test("mv promotes a workspace, repairs worktrees and follows the cwd", () => {
@@ -164,7 +168,7 @@ describe("repos", () => {
     const worktree = work(["clone", app, "exp"]).stdout.trim();
     const r = work(["mv", "labs", "--prefix", "IMG-7"], { cwd: worktree, wrapper: true });
     expect(r.code).toBe(0);
-    const moved = join(sb.root, "labs", "IMG-7-exp", "root", "app");
+    const moved = join(sb.root, "labs", "IMG-7-exp", "app");
     expect(r.emitted).toBe(`cd '${moved}'\n`);
     expect(g(moved, "status", "--porcelain")).toBe("");
     const store = join(sb.root, ".repos", "local", "remotes", "app.git");
@@ -176,7 +180,7 @@ describe("repos", () => {
     const app = makeRemote(sb, "app");
     const worktree = work(["clone", app, "old"]).stdout.trim();
     expect(work(["archive", "old"]).code).toBe(0);
-    const archived = join(sb.root, "tries", ".archive", "old", "root", "app");
+    const archived = join(sb.root, "tries", ".archive", "old", "app");
     expect(g(archived, "status", "--porcelain")).toBe("");
     expect(JSON.parse(work(["ls", "--json"]).stdout)).toEqual([]);
     expect(JSON.parse(work(["ls", "--json", "--archived"]).stdout)[0].name).toBe("old");
@@ -199,14 +203,42 @@ describe("repos", () => {
     expect(g(store, "worktree", "list")).not.toContain("gone");
   });
 
-  test("rm ./lane from inside the workspace", () => {
+  test("rm ./lane and rm ./<repo>@<lane> from inside the workspace", () => {
     const app = makeRemote(sb, "app");
+    const docs = makeRemote(sb, "docs");
     const workspace = work(["new", "e"]).stdout.trim();
     work(["add", app], { cwd: workspace });
-    work(["lane", "ui"], { cwd: join(workspace, "root") });
+    work(["add", docs], { cwd: workspace });
+    // the lane of the cwd comes from its @suffix
+    work(["lane", "ui"], { cwd: join(workspace, "app") });
+    expect(work(["lane", "polish"], { cwd: join(workspace, "app@ui") }).code).toBe(0);
+    expect(existsSync(join(workspace, "docs@polish"))).toBe(true);
+    // one worktree of a lane
+    expect(work(["rm", "./docs@polish", "--yes"], { cwd: workspace }).code).toBe(0);
+    expect(existsSync(join(workspace, "docs@polish"))).toBe(false);
+    expect(existsSync(join(workspace, "app@polish"))).toBe(true);
+    // the whole lane
     expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).code).toBe(0);
-    expect(existsSync(join(workspace, "ui"))).toBe(false);
-    expect(JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout).lanes.map((l: { name: string }) => l.name)).toEqual(["root"]);
+    expect(existsSync(join(workspace, "app@ui"))).toBe(false);
+    expect(existsSync(join(workspace, "docs@ui"))).toBe(false);
+    const lanes = JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout).lanes;
+    expect(lanes.map((l: { name: string; parent: string | null }) => [l.name, l.parent])).toEqual([
+      ["root", null],
+      ["polish", "root"], // re-parented when its parent lane went
+    ]);
+  });
+
+  test("path and info name worktree folders", () => {
+    const app = makeRemote(sb, "app");
+    const workspace = work(["new", "--space", "labs", "--prefix", "IMG-3", "flat"]).stdout.trim();
+    work(["add", app], { cwd: workspace });
+    work(["lane", "ui"], { cwd: workspace });
+    expect(work(["path", "flat", "app@ui"]).stdout.trim()).toBe(join(workspace, "app@ui"));
+    expect(work(["path", "flat", "ui"]).stdout.trim()).toBe(join(workspace, "app@ui")); // bare lane: unique worktree
+    expect(work(["path", "flat", "nope"]).code).toBe(1);
+    const info = work(["info", "flat"]).stdout;
+    expect(info).toContain("  ui  IMG-3-flat-ui  on root");
+    expect(info).toContain("    app@ui/  IMG-3-flat-ui");
   });
 });
 
@@ -350,55 +382,56 @@ describe("picker: start tab and lanes", () => {
     expect(plain(r.stderr)).toContain("\nno lanes — work add <repo>\n");
   });
 
-  test("→ lanes: Enter cds into a lane, a new lane is created after the picker, Ctrl-D + YES removes one", () => {
+  test("→ worktrees: Enter cds into one, a new lane is created after the picker, Ctrl-D + YES removes its lane", () => {
     const app = makeRemote(sb, "app");
     const worktree = work(["clone", app, "exp"]).stdout.trim();
     const ws = join(sb.root, "tries", "exp");
-    expect(worktree).toBe(join(ws, "root", "app"));
+    expect(worktree).toBe(join(ws, "app"));
 
     const cd = work(["--and-keys", `${RIGHT}\r`], { cwd: ws, wrapper: true });
     expect(cd.code).toBe(0);
-    expect(cd.emitted).toBe(`cd '${join(ws, "root")}'\n`);
-    // history records the workspace, not the lane
+    expect(cd.emitted).toBe(`cd '${join(ws, "app")}'\n`);
+    // history records the workspace, not the worktree
     const last = readFileSync(join(sb.root, ".work", "history.jsonl"), "utf8").trim().split("\n").at(-1)!;
     expect(JSON.parse(last).p).toBe("tries/exp");
 
-    // typed in the lane view: new lane "ui" on the highlighted lane (root), with root's repos
+    // typed in the worktree view: new lane "ui" on the highlighted row's lane (root), with root's repos
     const lane = work(["--and-keys", `${RIGHT}ui\r`], { cwd: worktree, wrapper: true });
     expect(lane.code).toBe(0);
-    expect(lane.emitted).toBe(`cd '${join(ws, "ui")}'\n`);
-    expect(g(join(ws, "ui", "app"), "branch", "--show-current")).toBe("exp-ui");
+    expect(lane.emitted).toBe(`cd '${join(ws, "app@ui")}'\n`);
+    expect(g(join(ws, "app@ui"), "branch", "--show-current")).toBe("exp-ui");
     const model = () => JSON.parse(readFileSync(join(ws, ".work.json"), "utf8"));
     expect(model().lanes.ui.parent).toBe("root");
 
-    // the lane view lists both lanes, parents first
+    // the view lists one row per worktree, lanes parents first
     const view = work(["--and-keys", RIGHT], { cwd: ws });
     const lines = plain(view.stderr).split("\n");
     expect(lines).toContain("📁 work › tries › exp");
-    expect(lines).toContain("→ 📁 root  exp     on main  app");
-    expect(lines).toContain("  📁 ui    exp-ui  on root  app");
+    expect(lines).toContain("→ 📁 app     exp     on main");
+    expect(lines).toContain("  📁 app@ui  exp-ui  on root");
 
-    const keep = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}NO\r`], { cwd: join(ws, "ui") });
+    const keep = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}NO\r`], { cwd: join(ws, "app@ui") });
     expect(keep.code).toBe(1);
     expect(plain(keep.stderr)).toContain("Remove cancelled");
-    expect(existsSync(join(ws, "ui", "app"))).toBe(true);
+    expect(existsSync(join(ws, "app@ui"))).toBe(true);
 
-    const rm = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: join(ws, "ui", "app"), wrapper: true });
+    const rm = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: join(ws, "app@ui"), wrapper: true });
     expect(rm.code).toBe(0);
-    expect(existsSync(join(ws, "ui"))).toBe(false);
+    expect(existsSync(join(ws, "app@ui"))).toBe(false);
     expect(model().lanes.ui).toBeUndefined();
     expect(rm.emitted).toBe(`cd '${ws}'\n`);
-    expect(g(join(ws, "root", "app"), "worktree", "list")).not.toContain("/ui/");
+    expect(g(join(ws, "app"), "worktree", "list")).not.toContain("app@ui");
   });
 
   test("creating a lane that fails reports the error like other commands", () => {
     const app = makeRemote(sb, "app");
     work(["clone", app, "exp"]);
     const ws = join(sb.root, "tries", "exp");
-    mkdirSync(join(ws, "stray"));
+    mkdirSync(join(ws, "app@stray"));
+    writeFileSync(join(ws, "app@stray", "file.txt"), "in the way");
     const r = work(["--and-keys", `${RIGHT}stray\r`], { cwd: ws });
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain(`${join(ws, "stray")} already exists`);
+    expect(r.stderr).toContain("app@stray");
   });
 });
 

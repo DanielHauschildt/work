@@ -271,8 +271,8 @@ d("command parity", () => {
     evalTry(runTry(["exec", "./"], plain), plain);
     runWork(["exec", "./"], plain);
     expect(listing(join(workRoot, "tries"))).toEqual(listing(tryDir));
-    // work puts the worktree in lane root on a named branch (try: detached at the workspace root)
+    // work puts the worktree of lane root next to the workspace (try: detached at the workspace root)
     const today = listing(tryDir).find((n) => n.endsWith("-exp"))!;
-    expect(g(join(workRoot, "tries", today, "root", "seed-app"), "branch", "--show-current")).toBe("exp");
+    expect(g(join(workRoot, "tries", today, "seed-app"), "branch", "--show-current")).toBe("exp");
   }, 60_000);
 });

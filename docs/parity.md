@@ -22,11 +22,11 @@ test in `test/parity.test.ts` (differential against the installed try where the 
 | 15 | Esc / Ctrl-C: leave delete mode, else cancel → `Cancelled.` exit 1 | same | identical |
 | 16 | select → `touch` + `cd` | history record + `cd` | changed (no touch) |
 | 17 | create → `mkdir -p` + `cd` | same | identical |
-| 18 | `try clone <url> [name]`, `try <url> [name]` → dir `DATE-user-repo` (custom name: no date) | `work clone …` → same dir name, store + `root/<repo>` worktree | changed layout |
+| 18 | `try clone <url> [name]`, `try <url> [name]` → dir `DATE-user-repo` (custom name: no date) | `work clone …` → same dir name, store + `<repo>/` worktree in lane root | changed layout |
 | 19 | URL detection `^(https?://|git@)`, contains github.com/gitlab.com, ends `.git` | same | identical |
 | 20 | URL parsing github/gitlab/other https/ssh, `.git` stripped | same (+ file paths) | identical |
-| 21 | `try . <name>` (bare `.` requires a name), `try ./path [name]` → dated dir, worktree of that repo | same, worktree in `root/<repo>` on a named branch | changed (named branch, lane) |
-| 22 | `try worktree dir|<path> [name]` | removed (error): use `work ./path [name]` / `work . <name>` — "worktree" means a repo folder in a lane | removed |
+| 21 | `try . <name>` (bare `.` requires a name), `try ./path [name]` → dated dir, worktree of that repo | same, worktree `<repo>/` in lane root on a named branch | changed (named branch, lane) |
+| 22 | `try worktree dir|<path> [name]` | removed (error): use `work ./path [name]` / `work . <name>` — "worktree" means a repo folder `<repo>[@<lane>]` in a workspace | removed |
 | 23 | worktree name versioning: `name` → `name2`/`-2` when today's dir exists | same | identical |
 | 24 | non-git dir with `.` → just mkdir + cd | same | identical |
 | 25 | `try exec [args]`, `exec cd|clone|worktree` → script on stdout with warning comment | `work exec …` (no `exec worktree`, see 22) | identical |

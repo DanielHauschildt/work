@@ -10,10 +10,14 @@ shared bare repo stores, stacked PRs, shell completion and an agent-friendly CLI
 ├── tries/2026-09-19-redis-bench/             ephemeral (try's folders)
 └── labs/IMG-1234-autofit/                    workspace with lanes
     ├── AGENTS.md, CLAUDE.md                  generated context for agents
-    ├── root/cesdk-web/                       lane root  · branch IMG-1234-autofit     · on origin/main
-    ├── ui/cesdk-web/                         lane ui    · branch IMG-1234-autofit-ui  · on root
-    └── guide/docs/                           lane guide · branch IMG-1234-autofit-guide · on root
+    ├── cesdk-web/                            lane root  · branch IMG-1234-autofit
+    ├── docs/                                 lane root  · branch IMG-1234-autofit
+    ├── cesdk-web@ui/                         lane ui    · branch IMG-1234-autofit-ui   · on root
+    └── docs@guide/                           lane guide · branch IMG-1234-autofit-guide · on root
 ```
+
+A lane is a concept, not a folder: one branch, its worktrees and a stack parent. Each worktree sits directly in the
+workspace as `<repo>` (lane `root`) or `<repo>@<lane>`.
 
 ## Install
 
@@ -37,20 +41,22 @@ tries redis                   # picker filtered by "redis"; Enter on "Create new
 work                          # picker across all spaces
 labs autofit --prefix IMG-1234   # picker in labs; creating makes IMG-1234-autofit
 work new --space labs --prefix IMG-1234 autofit   # create without the picker (prints the path)
-work clone https://github.com/tobi/try.git        # tries/2026-09-19-tobi-try/root/try
+work clone https://github.com/tobi/try.git        # tries/2026-09-19-tobi-try/try
 work . experiment             # new workspace with a worktree of the current repo
 work -                        # previous workspace
 
-work add imgly/cesdk-web      # worktree in the current lane (default: root), shared store in .repos
-work lane ui --on root        # stacked lane with the same repos, branch <workspace>-ui
-work lane guide docs          # lane with other repos (on the current lane, or --on trunk)
+work add imgly/cesdk-web      # worktree cesdk-web/ in the current lane (default: root), store in .repos
+work lane ui --on root        # stacked lane with the same repos: cesdk-web@ui/, branch <workspace>-ui
+work lane guide docs          # lane with other repos: docs@guide/ (on the current lane, or --on trunk)
 work sync                     # restack every lane onto its parent (conflict → fix → work sync --continue)
 work submit --draft           # push lanes, open one PR per repo+lane with base = parent lane's branch
 
 work mv labs --prefix IMG-99  # promote the current workspace from tries to labs, worktrees repaired
 work archive / unarchive      # <space>/.archive/<workspace>
-work rm ./ui --yes            # remove a lane (refuses dirty/unpushed work without --force)
-work info --json | work ls --json | work path <query> [lane]
+work rm ./ui --yes            # remove a lane = all its worktrees (refuses dirty/unpushed without --force)
+work rm ./cesdk-web@ui --yes  # remove a single worktree
+work migrate                  # old <lane>/<repo> folders → <repo>[@<lane>] (--all for every workspace)
+work info --json | work ls --json | work path <query> [folder]
 ```
 
 ### Picker
@@ -79,24 +85,25 @@ Search: autofit▌
 - try's keys: ↑↓ Ctrl-P/N, Enter, Ctrl-T new, Ctrl-D mark + Enter + `YES` delete, Ctrl-A/E/B/F/K/W/H editing, Esc;
   plus Ctrl-R move to `space/name`.
 
-**→ on a workspace** shows its lanes (← goes back to the list):
+**→ on a workspace** shows its worktrees grouped by lane (← goes back to the list):
 
 ```text
 📁 work › labs › IMG-1234-autofit
 ──────────────────────────────────────────────────────────
 Search: ▌
 ──────────────────────────────────────────────────────────
-→ 📁 root   IMG-1234-autofit        on main  cesdk-web
-  📁 ui     IMG-1234-autofit-ui     on root  cesdk-web  *
-  📁 guide  IMG-1234-autofit-guide  on root  docs
+→ 📁 cesdk-web     IMG-1234-autofit        on main
+  📁 docs          IMG-1234-autofit        on main
+  📁 cesdk-web@ui  IMG-1234-autofit-ui     on root  *
+  📁 docs@guide    IMG-1234-autofit-guide  on root
 ──────────────────────────────────────────────────────────
 ↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc
 ```
 
-Enter cds into the lane. Type a name to get `📂 New lane on <lane>: <name>` — the new lane stacks on the lane you
-highlighted last and gets its repos (like `work lane`); Enter or Ctrl-T creates it. Ctrl-D removes the
-highlighted lane after `YES` (dirty or unpushed worktrees are listed first). `*` marks lanes with uncommitted
-changes.
+Enter cds into the worktree. Type a name to get `📂 New lane on <lane>: <name>` — the new lane stacks on the lane of
+the row you highlighted last and gets its repos (like `work lane`); Enter or Ctrl-T creates it. Ctrl-D removes the
+whole lane of the highlighted row after `YES` (dirty or unpushed worktrees are listed first). `*` marks worktrees
+with uncommitted changes; a lane without worktrees is one row showing its name, its branch and `no worktrees`.
 
 Spaces from the command line: `work space` (list), `work space new clients --prefix none`,
 `work space set labs --prefix IMG`.
@@ -112,16 +119,18 @@ cleanup_days = 30          # mark workspaces not visited for 30 days as stale (p
 
 ## Agents
 
-Every workspace and lane gets an `AGENTS.md` (generated block, your own text is kept) and a `CLAUDE.md` that
-imports it. `skill/SKILL.md` is a Claude Code skill for the CLI (copy to `~/.claude/skills/work/`).
+Every workspace gets an `AGENTS.md` (generated block, your own text is kept) and a `CLAUDE.md` that imports it —
+at workspace level only, so nothing generated shows up as an untracked file inside one of your repos. The table
+lists lane, branch, stacked-on and folders, and the rules tell each agent to work only in its own lane's folders.
+`skill/SKILL.md` is a Claude Code skill for the CLI (copy to `~/.claude/skills/work/`).
 All non-picker commands work without a TTY, take `--json`, and use `--yes` instead of typed confirmation.
 
 ## Differences to try
 
 See [docs/parity.md](docs/parity.md). In short: the root is `~/Work` with spaces instead of one tries folder,
-`clone`/`.` create worktrees in lane `root` on a named branch (try: detached worktree / plain clone at the workspace
-root), recency comes from a visit log instead of `touch`, deletion is git-aware, and the shell wrapper sources a
-temp file so normal stdout (e.g. `work ls --json | jq`) works through it.
+`clone`/`.` create a worktree in lane `root` (folder `<repo>/`) on a named branch (try: detached worktree / plain
+clone at the workspace root), recency comes from a visit log instead of `touch`, deletion is git-aware, and the
+shell wrapper sources a temp file so normal stdout (e.g. `work ls --json | jq`) works through it.
 
 ## Develop
 

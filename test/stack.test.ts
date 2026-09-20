@@ -64,7 +64,7 @@ function setup(): { r: string; ui: string } {
   const r = addRepo(root, workspace, { lane: "root", spec: "https://github.com/acme/app.git", cwd: sb.dir });
   commit(r, "core.txt", "core v1");
   createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
-  const ui = join(workspace, "ui", "app");
+  const ui = join(workspace, "app@ui");
   commit(ui, "ui.txt", "ui v1");
   return { r, ui };
 }

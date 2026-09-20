@@ -23,19 +23,20 @@ export interface PickerItem {
   stale?: boolean;
   /** optional async check; when it resolves true a "*" badge is added and the list redrawn */
   dirty?: () => Promise<boolean>;
-  /** lanes of the workspace (called once, when → opens the lane view); undefined = not a lane workspace */
-  lanes?: () => LaneRow[];
+  /** worktrees of the workspace (called once, when → opens the worktree view); undefined = no lanes */
+  worktrees?: () => WorktreeRow[];
 }
 
-export interface LaneRow {
-  /** lane folder name */
-  name: string;
-  /** absolute lane path */
+/** One worktree of a workspace; rows arrive grouped by lane (parents first). */
+export interface WorktreeRow {
+  /** folder name (`cesdk-web`, `cesdk-web@ui`); "" for a lane without worktrees */
+  folder: string;
+  lane: string;
+  /** absolute worktree path (the workspace itself when there is no worktree) */
   path: string;
   branch: string;
   /** parent lane, null = trunk */
   parent: string | null;
-  repos: string[];
   /** optional async check; when it resolves true a "*" is added and the list redrawn */
   dirty?: () => Promise<boolean>;
 }
@@ -111,9 +112,9 @@ interface View {
   showSpace: boolean;
 }
 
-/** What the lane view shows for the current query. */
+/** What the worktree view shows for the current query. */
 interface LaneView {
-  rows: LaneRow[];
+  rows: WorktreeRow[];
   /** create row: new lane `name` on `parent` */
   create: { name: string; parent: string } | null;
 }
@@ -127,7 +128,7 @@ const DATE_NAME = /^(\d{4}-\d{2}-\d{2})-(.+)$/;
 const PRINTABLE = /^[a-zA-Z0-9\-_. /]$/;
 const ALNUM = /[a-zA-Z0-9]/;
 const EXIT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
-const HELP = "↑↓ Enter  → Lanes  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
+const HELP = "↑↓ Enter  → Worktrees  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
 const LANE_HELP = "↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc";
 const NO_DATE = new Date(Number.NaN);
 const HEADER = "📁 work";
@@ -191,7 +192,7 @@ class Picker {
   /** async dirty state per item / lane row (by identity): false while pending or clean */
   private readonly dirty = new Map<object, boolean>();
   private readonly createOptionsCache = new Map<string, CreateOption[]>();
-  private readonly lanesCache = new Map<PickerItem, LaneRow[]>();
+  private readonly lanesCache = new Map<PickerItem, WorktreeRow[]>();
 
   constructor(private readonly opts: PickerOptions) {
     const searchTerm = dashify(opts.query ?? "");
@@ -400,12 +401,12 @@ class Picker {
     if (idx >= 0) this.cursorPos = idx;
   }
 
-  /** Lanes of a workspace, loaded once (row identity keeps the async dirty state). */
-  private lanesOf(item: PickerItem): LaneRow[] | undefined {
-    if (!item.lanes) return undefined;
+  /** Worktrees of a workspace, loaded once (row identity keeps the async dirty state). */
+  private lanesOf(item: PickerItem): WorktreeRow[] | undefined {
+    if (!item.worktrees) return undefined;
     let lanes = this.lanesCache.get(item);
     if (!lanes) {
-      lanes = item.lanes();
+      lanes = item.worktrees();
       this.lanesCache.set(item, lanes);
     }
     return lanes;
@@ -453,7 +454,7 @@ class Picker {
           this.cursorPos = Math.min(this.cursorPos + 1, totalItems - 1);
           break;
         case "\x1b[C": {
-          // Right arrow - lane view of the workspace (try ignores it)
+          // Right arrow - worktree view of the workspace (try ignores it)
           const item = tries[this.cursorPos]?.item;
           const lanes = item && this.lanesOf(item);
           if (!item || !lanes) break;
@@ -1076,7 +1077,7 @@ class Picker {
    * → on a workspace: its lanes, filtered by the query, plus a create row for a new lane. Returns a result, null
    * (Esc: cancel the picker) or BACK (←: the workspace list is restored with the cursor on `item`).
    */
-  private async browseLanes(item: PickerItem, lanes: LaneRow[]): Promise<PickerResult | typeof BACK> {
+  private async browseLanes(item: PickerItem, lanes: WorktreeRow[]): Promise<PickerResult | typeof BACK> {
     const saved = {
       input: this.input,
       inputCursorPos: this.inputCursorPos,
@@ -1088,7 +1089,7 @@ class Picker {
     this.cursorPos = 0;
     this.scrollOffset = 0;
     this.deleteMode = false;
-    let parent = lanes[0]!.name;
+    let parent = lanes[0]!.lane;
 
     for (;;) {
       const view = this.laneView(lanes, () => parent);
@@ -1096,7 +1097,7 @@ class Picker {
       this.cursorPos = Math.min(Math.max(this.cursorPos, 0), Math.max(total - 1, 0));
       const highlighted = view.rows[this.cursorPos];
       if (highlighted) {
-        parent = highlighted.name;
+        parent = highlighted.lane;
         if (view.create) view.create.parent = parent;
       }
 
@@ -1125,7 +1126,7 @@ class Picker {
         case "\x04": {
           // Ctrl-D - remove lane
           if (!highlighted) break;
-          const result = await this.confirmLaneRemoval(item, highlighted);
+          const result = await this.confirmLaneRemoval(item, highlighted, lanes);
           if (result) return result;
           break;
         }
@@ -1153,21 +1154,22 @@ class Picker {
   }
 
   /** Why the query can't be a new lane name, or undefined. */
-  private laneNameProblem(lanes: LaneRow[]): string | undefined {
+  private laneNameProblem(lanes: WorktreeRow[]): string | undefined {
     const name = this.laneName();
     if (name === "") return "Type a name for the new lane";
     if (!LANE_NAME.test(name)) return `Invalid lane name: ${name}`;
-    if (lanes.some((l) => l.name === name)) return `Lane ${name} already exists`;
+    if (lanes.some((l) => l.lane === name)) return `Lane ${name} already exists`;
     return undefined;
   }
 
-  private laneView(lanes: LaneRow[], parent: () => string): LaneView {
+  /** Rows stay grouped by lane; filtering matches the folder name (the lane name for an empty lane). */
+  private laneView(lanes: WorktreeRow[], parent: () => string): LaneView {
     const query = this.query;
     const rows =
       query === ""
         ? lanes
         : lanes
-            .map((lane) => ({ lane, score: calculateScore(lane.name, query, NO_DATE, this.now) }))
+            .map((lane) => ({ lane, score: calculateScore(rowName(lane), query, NO_DATE, this.now) }))
             .filter((r) => r.score > 0)
             .sort((a, b) => b.score - a.score)
             .map((r) => r.lane);
@@ -1175,16 +1177,16 @@ class Picker {
     return { rows, create };
   }
 
-  private renderLanes(item: PickerItem, lanes: LaneRow[], view: LaneView): void {
+  private renderLanes(item: PickerItem, lanes: WorktreeRow[], view: LaneView): void {
     const ui = this.ui;
     const termWidth = ui.width();
     // Header: breadcrumb
     ui.puts(`{h1}${HEADER}{reset}{dim} › ${item.space} › {/fg}{section}${item.basename}{/section}`);
     this.renderSearch("Search:");
 
-    // column widths over all lanes, so filtering doesn't shift them
+    // column widths over all rows, so filtering doesn't shift them
     const widths = {
-      name: Math.min(Math.max(...lanes.map((l) => len(l.name))), 24),
+      name: Math.min(Math.max(...lanes.map((l) => len(rowName(l)))), 24),
       branch: Math.min(Math.max(...lanes.map((l) => len(l.branch))), 40),
       on: Math.min(Math.max(...lanes.map((l) => len(parentLabel(l)))), 24),
     };
@@ -1204,9 +1206,9 @@ class Picker {
     this.renderFooter(`{dim}${LANE_HELP}{/fg}`);
   }
 
-  /** `📁 ui     IMG-1234-autofit-ui     on root  cesdk-web docs  *`: aligned columns, trailing ones dropped when too wide. */
+  /** `📁 cesdk-web@ui   IMG-1234-autofit-ui   on root   *`: aligned columns, trailing ones dropped when too wide. */
   private renderLaneRow(
-    lane: LaneRow,
+    lane: WorktreeRow,
     isSelected: boolean,
     termWidth: number,
     query: string,
@@ -1216,7 +1218,7 @@ class Picker {
     this.startDirtyCheck(lane);
     const available = termWidth - 5 - 1; // "→ 📁 " and one column at the end
 
-    let name = lane.name;
+    let name = rowName(lane);
     if (len(name) > available && available > 2) name = `${take(name, available - 1)}…`;
     ui.print("📁 ");
     if (isSelected) ui.print("{section}");
@@ -1226,7 +1228,7 @@ class Picker {
     const columns: Array<[string, number]> = [
       [lane.branch, widths.branch],
       [parentLabel(lane), widths.on],
-      [lane.repos.join(" "), 0],
+      [lane.folder === "" ? "no worktrees" : "", 0],
       [this.dirty.get(lane) === true ? "*" : "", 0],
     ];
     let printed = len(name); // columns printed so far
@@ -1241,16 +1243,18 @@ class Picker {
     }
   }
 
-  /** Ctrl-D on a lane: YES screen with the lane's warnings. */
-  private async confirmLaneRemoval(item: PickerItem, lane: LaneRow): Promise<PickerResult> {
-    const warnings = this.opts.deleteWarnings?.([lane.path]) ?? [];
-    const confirmation = await this.askYes(`Remove lane ${lane.name}`, [`${item.basename}/${lane.name}`], warnings);
+  /** Ctrl-D on a row: YES screen for its whole lane (all worktrees of that lane). */
+  private async confirmLaneRemoval(item: PickerItem, lane: WorktreeRow, lanes: WorktreeRow[]): Promise<PickerResult> {
+    const paths = lanes.filter((l) => l.lane === lane.lane && l.folder !== "").map((l) => l.path);
+    const warnings = this.opts.deleteWarnings?.(paths) ?? [];
+    const folders = paths.length ? paths.map((p) => `${item.basename}/${p.split("/").pop()}`) : [`${item.basename}: lane ${lane.lane}`];
+    const confirmation = await this.askYes(`Remove lane ${lane.lane}`, folders, warnings);
 
     let result: PickerResult = null;
     if (confirmation === "YES") {
       try {
-        this.insideRoot(lane.path);
-        result = { type: "deleteLane", workspace: item.path, lane: lane.name };
+        for (const p of paths) this.insideRoot(p);
+        result = { type: "deleteLane", workspace: item.path, lane: lane.lane };
       } catch (e) {
         if (!(e instanceof SafetyError)) throw e;
         this.status = `Error: ${e.message}`;
@@ -1264,7 +1268,12 @@ class Picker {
   }
 }
 
-function parentLabel(lane: LaneRow): string {
+/** Row label: the worktree folder, or the lane name for a lane without worktrees. */
+function rowName(row: WorktreeRow): string {
+  return row.folder || row.lane;
+}
+
+function parentLabel(lane: WorktreeRow): string {
   return `on ${lane.parent ?? "main"}`;
 }
 

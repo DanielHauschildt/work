@@ -11,8 +11,8 @@ Bun + TypeScript, compiled to a single binary (`bun build --compile`).
 | root | base folder, configurable (`work init <path>`, `--path`, `WORK_ROOT`, default `~/Work`) | `~/Work` |
 | space | any non-hidden folder in root | `tries`, `labs`, `clients` |
 | workspace | a folder in a space (try's "try") | `labs/IMG-1234-autofit` |
-| lane | a feature inside a workspace: one branch, one agent | `labs/IMG-1234-autofit/ui` |
-| worktree | one repo inside a lane, as a git worktree of its store | `labs/IMG-1234-autofit/ui/cesdk-web` |
+| lane | a feature in a workspace: one branch, one agent, one parent — not a folder | `ui` → `IMG-1234-autofit-ui` |
+| worktree | one repo of a lane, a git worktree of its store, in the workspace | `IMG-1234-autofit/cesdk-web@ui` |
 | store | shared bare clone backing all worktrees of a repo | `~/Work/.repos/github.com/imgly/cesdk-web.git` |
 
 Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
@@ -30,11 +30,12 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
 │   └── 2026-09-19-redis-bench/
 │       ├── .work.json                 lanes, parents, bases, PRs (only once a repo was added)
 │       ├── AGENTS.md, CLAUDE.md       generated (phase 2)
-│       └── root/redis/                lane "root", worktree of redis, branch `redis-bench`
+│       └── redis/                     lane "root", worktree of redis, branch `redis-bench`
 └── labs/IMG-1234-autofit/
-    ├── root/cesdk-web/                branch IMG-1234-autofit        on origin/main
-    ├── ui/cesdk-web/                  branch IMG-1234-autofit-ui     on root
-    └── guide/docs/                    branch IMG-1234-autofit-guide  on root (docs not in root → on origin/main)
+    ├── cesdk-web/                     lane root,  branch IMG-1234-autofit        on origin/main
+    ├── docs/                          lane root,  branch IMG-1234-autofit        on origin/main
+    ├── cesdk-web@ui/                  lane ui,    branch IMG-1234-autofit-ui     on root
+    └── docs@guide/                    lane guide, branch IMG-1234-autofit-guide  on root
 ```
 
 - Workspace name = `<prefix>-<name>`; prefix `auto` = today `YYYY-MM-DD`, `""` = none, else literal (`IMG-1234`).
@@ -46,7 +47,17 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
   (`-` not `/`: git can't hold `x` and `x/ui` at once.)
 - Workspaces without `.work.json` are plain folders (all existing tries). A `.git` at a workspace root (legacy
   `try clone`) is left alone; the workspace is still listed and cd-able.
-- Lanes are always folders; the first lane defaults to `root`.
+- A lane is not a folder: `.work.json` holds it, its worktrees sit directly in the workspace. Worktree folder =
+  `<repo>` in lane `root`, `<repo>@<lane>` in every other lane; a repo name must therefore not contain `@`. The
+  first lane defaults to `root`; the current lane is the suffix of the cwd's folder (`docs@ui` → `ui`, none →
+  `root`). A lane with no repos has no folder at all.
+- `work migrate` converts older `<lane>/<repo>` folders to `<repo>[@<lane>]` with `git worktree move` (a plain
+  legacy repo is renamed), deletes the emptied lane folders, rewrites `.work.json` and `AGENTS.md`, and follows the
+  cwd into the moved worktree. Everything is checked first: one dirty, unpushed or rebasing worktree refuses the
+  whole workspace and moves nothing (`--force` skips the check), and a lane folder that still holds other files is
+  kept (`--force` deletes it). Until a workspace is converted, `info`, the picker rows, `rm` of one worktree and
+  `path <query> <lane>` still find the old folder, while `add`, `lane`, `rm` of a lane, `sync` and `submit` refuse
+  it with "run `work migrate` first".
 
 ## Shell integration
 
@@ -77,15 +88,18 @@ work new [--space S] [--prefix P] <name>    create without picker (agents), prin
 work - | back                    cd to previous workspace (history)
 work . <name> | ./path [name]    new workspace; if the path is a git repo, a worktree of it in lane root
 work clone <url> [name] | <url>  new workspace `<prefix>-<owner>-<repo>`; store + worktree in lane root
-work path <query> [lane]         print absolute path of the unique best match (exit 1 if none/ambiguous)
+work path <query> [folder]       print absolute path of the unique best match (exit 1 if none/ambiguous);
+                                 folder = <repo>[@<lane>], or a lane name when it has exactly one worktree
 work ls [--space S] [--json] [--stale]
 work space [ls | new <name> [--prefix P] | set <name> --prefix P]
-work info [workspace] [--json]   lanes, repos, branches, dirty/unpushed, parents, PRs
-work add <repo|url|path> [branch] [--lane L]   add worktree to lane (default: current lane, else root)
-work lane <name> [repos...] [--on PARENT]      create lane (phase 2)
+work info [workspace] [--json]   lanes with their folders, branches, dirty/unpushed, parents, PRs
+work add <repo|url|path> [branch] [--lane L]   worktree <repo>[@<lane>] (default lane: current, else root)
+work lane <name> [repos...] [--on PARENT]      stacked lane: one worktree <repo>@<name> per repo (phase 2)
+work migrate [workspace | --all] [--force]     convert <lane>/<repo> folders to <repo>[@<lane>]
 work mv <workspace> <space>[/<name>] [--prefix P]  move/rename/promote; repairs worktrees; cd follows if inside
 work archive [workspace] | unarchive <workspace>
-work rm [workspace | workspace/lane | workspace/lane/repo] [--yes] [--force]
+work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]
+                                 a lane removes all its worktrees, a folder just that one
 work sync [--continue | --abort]  restack lanes (phase 3)
 work submit [--draft]             push + PRs per lane worktree (phase 3)
 work init | exec | __complete | --help | --version
@@ -117,12 +131,14 @@ filters that space and creates there; an unknown space is created after asking i
 asynchronously and redrawn, `stale` when older than the space's `cleanup_days`); Ctrl-R rename/move (prompt
 `space/name`). Recency = last visit from history, else mtime.
 
-Lane view (try ignores ←/→, so try parity holds): → on a workspace with lanes shows them (parents first) under a
-breadcrumb `📁 work › space › workspace`: name, branch, `on <parent|main>`, repos, async `*` dirty; typing filters
-them. Enter cds into the lane (history records the workspace). A valid new name (`^[A-Za-z0-9][A-Za-z0-9._-]*$`,
-whitespace → `-`) adds `📂 New lane on <lane>: <name>` on the last highlighted lane; Enter / Ctrl-T returns it and the
-CLI runs `createLane` (inherits the parent's repos) after the picker closed, then cds into it. Ctrl-D on a lane: YES
-screen with `removalWarnings(lane path)`, then the CLI runs `removeLane`. ← returns to the list with the query
+Worktree view (try ignores ←/→, so try parity holds): → on a workspace with lanes shows its worktrees grouped by
+lane (parents first) under a breadcrumb `📁 work › space › workspace`: folder name (`cesdk-web@ui`), branch,
+`on <parent|main>`, async `*` dirty; a lane without worktrees gets one row with its lane name and `no worktrees`;
+typing filters by folder name. Enter cds into the worktree (history records the workspace). A valid new name
+(`^[A-Za-z0-9][A-Za-z0-9._-]*$`, whitespace → `-`) adds `📂 New lane on <lane>: <name>` on the lane of the last
+highlighted row; Enter / Ctrl-T returns it and the CLI runs `createLane` (inherits the parent's repos) after the
+picker closed, then cds into the first new worktree. Ctrl-D on a row: YES screen listing that lane's folders with
+`removalWarnings`, then the CLI runs `removeLane` for the whole lane. ← returns to the list with the query
 restored and the cursor on the workspace; Esc cancels the picker. → on a workspace without lanes shows
 `no lanes — work add <repo>`.
 
@@ -166,9 +182,14 @@ cleanup_days = 30          # flag workspaces not visited for N days (picker badg
 
 ## Agents (phase 2)
 
-Workspace and lane get `AGENTS.md` (generated block between `<!-- work:begin -->`/`<!-- work:end -->`, rest is kept)
-and `CLAUDE.md` containing `@AGENTS.md` (created only if missing). Lane file: your lane, branch, parent, repos,
-sibling lanes are off-limits, use `work sync` / `work submit`. A Claude Code skill lives in `skill/SKILL.md`.
+The workspace gets `AGENTS.md` (generated block between `<!-- work:begin -->`/`<!-- work:end -->`, rest is kept)
+and `CLAUDE.md` containing `@AGENTS.md` (created only if missing) — at workspace level only, because a generated
+file inside a worktree would show up as untracked in the user's repo. The block holds a table
+`| Lane | Branch | Stacked on | Folders |` (folders `<repo>/` or `<repo>@<lane>/`, a repo on its own branch with
+that branch in parentheses) and the rules: work only in your own lane's folders, the others belong to other agents;
+commit on the lane's branch and never switch branches inside a worktree; `work info --json` for lanes, branches
+and status; `work sync` / `work submit`; `work lane <name> [repos…] --on <lane>` for a new stacked feature.
+A Claude Code skill lives in `skill/SKILL.md`.
 `--json` on ls/info/path/new, `--yes` replaces typed YES, no prompts without a TTY.
 
 ## Stacks (phase 3)

@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { writeAgentFiles } from "./agents.ts";
 import { fail } from "./errors.ts";
-import { findWorktrees, worktreeStatus } from "./git.ts";
+import { findWorktrees, isRepoDir, worktreeStatus } from "./git.ts";
 import { withLock } from "./lock.ts";
-import { LANE_NAME, laneBranch } from "./naming.ts";
+import { LANE_NAME, laneBranch, laneOfFolder, ROOT_LANE, worktreeDir } from "./naming.ts";
 import {
   childrenOf,
   loadModel,
@@ -23,7 +23,7 @@ import {
 } from "./repos.ts";
 import type { Root } from "./root.ts";
 
-export const DEFAULT_LANE = "root";
+export const DEFAULT_LANE = ROOT_LANE;
 
 /** Serialize read-modify-write of a workspace's .work.json across processes (parallel agents). */
 export function withWorkspace<T>(root: Root, workspacePath: string, fn: (model: WorkspaceModel) => T): T {
@@ -44,11 +44,9 @@ function runHook(cmd: string, cwd: string): void {
 
 function ensureLaneRec(model: WorkspaceModel, workspacePath: string, lane: string, parent: string | null): void {
   if (!LANE_NAME.test(lane)) fail(`invalid lane name: ${lane}`);
-  if (!model.lanes[lane]) {
-    if (parent !== null && !model.lanes[parent]) fail(`unknown parent lane: ${parent}`);
-    model.lanes[lane] = { parent, branch: laneBranch(basename(workspacePath), lane), repos: {} };
-  }
-  mkdirSync(join(workspacePath, lane), { recursive: true });
+  if (model.lanes[lane]) return;
+  if (parent !== null && !model.lanes[parent]) fail(`unknown parent lane: ${parent}`);
+  model.lanes[lane] = { parent, branch: laneBranch(basename(workspacePath), lane), repos: {} };
 }
 
 /** Ref a new branch in `lane` should start from for this repo: the nearest ancestor lane's branch, else trunk. */
@@ -74,12 +72,14 @@ export interface AddOptions {
 /** Add a worktree of a repo to a lane (creating the lane if needed). Returns the worktree path. */
 export function addRepo(root: Root, workspacePath: string, opts: AddOptions): string {
   const src = resolveRepo(root, opts.spec, opts.cwd);
+  // `@` separates repo and lane in folder names, so a repo can't carry one
+  if (src.name.includes("@")) fail(`repo name must not contain '@': ${src.name}`);
   const path = withWorkspace(root, workspacePath, (model) => {
     ensureLaneRec(model, workspacePath, opts.lane, opts.parent ?? null);
     const lane = model.lanes[opts.lane]!;
     if (lane.repos[src.name]) fail(`${src.name} is already in lane ${opts.lane}`);
     const branch = opts.branch ?? lane.branch;
-    const worktree = join(workspacePath, opts.lane, src.name);
+    const worktree = join(workspacePath, worktreeDir(opts.lane, src.name));
     const baseRef = baseRefFor(model, opts.lane, src.name, src);
     const { base } = addWorktree(root, src, worktree, branch, baseRef);
     lane.repos[src.name] = { source: src.path, base, ...(branch !== lane.branch ? { branch } : {}) };
@@ -97,18 +97,35 @@ export interface LaneOptions {
   postAdd?: string;
 }
 
-/** Create a lane; without explicit repos it inherits the parent lane's repos. */
-export function createLane(root: Root, workspacePath: string, opts: LaneOptions): string {
+/** Create a lane; without explicit repos it inherits the parent lane's repos. Returns the new worktrees. */
+export function createLane(root: Root, workspacePath: string, opts: LaneOptions): string[] {
   const specs = withWorkspace(root, workspacePath, (model) => {
     if (model.lanes[opts.name]) fail(`lane ${opts.name} already exists`);
-    if (existsSync(join(workspacePath, opts.name))) fail(`${join(workspacePath, opts.name)} already exists`);
     ensureLaneRec(model, workspacePath, opts.name, opts.parent);
     if (opts.repos.length) return opts.repos;
     const parent = opts.parent ? model.lanes[opts.parent] : undefined;
     return parent ? Object.values(parent.repos).map((r) => r.source) : [];
   });
-  for (const spec of specs) addRepo(root, workspacePath, { lane: opts.name, spec, cwd: opts.cwd, postAdd: opts.postAdd });
-  return join(workspacePath, opts.name);
+  return specs.map((spec) => addRepo(root, workspacePath, { lane: opts.name, spec, cwd: opts.cwd, postAdd: opts.postAdd }));
+}
+
+/** Worktree folder of a repo: flat `<repo>[@<lane>]`, or the legacy `<lane>/<repo>` folder while it exists. */
+export function worktreePath(workspacePath: string, lane: string, repo: string): string {
+  const flat = join(workspacePath, worktreeDir(lane, repo));
+  if (existsSync(flat)) return flat;
+  const legacy = join(workspacePath, lane, repo);
+  return existsSync(legacy) ? legacy : flat;
+}
+
+/** Lanes of `model` that still have a `<lane>/` folder (layout before worktrees became `<repo>@<lane>`). */
+export function legacyLanes(workspacePath: string, model: WorkspaceModel): string[] {
+  return Object.keys(model.lanes).filter((lane) => existsSync(join(workspacePath, lane)));
+}
+
+/** Refuse to touch a workspace that `work migrate` hasn't converted yet. */
+export function requireFlatLayout(workspacePath: string, model: WorkspaceModel): void {
+  const old = legacyLanes(workspacePath, model);
+  if (old.length) fail(`${workspacePath} still uses lane folders (${old.join(", ")}) — run \`work migrate\` first`);
 }
 
 export interface RemovalCheck {
@@ -116,7 +133,7 @@ export interface RemovalCheck {
   warnings: string[];
 }
 
-/** Dirty / unpushed warnings for every worktree below `dir`. */
+/** Dirty / unpushed warnings for `dir` itself (a worktree) or every worktree in it. */
 export function removalWarnings(dir: string): string[] {
   const worktrees = existsSync(join(dir, ".git")) ? [dir] : findWorktrees(dir, 2);
   const out: string[] = [];
@@ -137,6 +154,13 @@ export function removeTree(root: Root, dir: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 
+/** Remove one worktree of a lane: with git when it is one, else just the folder (legacy plain clone). */
+function removeWorktreeDir(root: Root, dir: string): void {
+  if (!existsSync(dir)) return;
+  if (isRepoDir(dir) && !isMainRepo(dir)) removeWorktree(root, dir);
+  else removeTree(root, dir);
+}
+
 function isMainRepo(dir: string): boolean {
   try {
     return statSync(join(dir, ".git")).isDirectory();
@@ -145,12 +169,13 @@ function isMainRepo(dir: string): boolean {
   }
 }
 
+/** Remove a lane: all its worktrees (the folder of each), then the record. Children inherit its parent. */
 export function removeLane(root: Root, workspacePath: string, lane: string): void {
   withWorkspace(root, workspacePath, (model) => {
-    if (!model.lanes[lane]) fail(`unknown lane: ${lane}`);
-    const rec = model.lanes[lane]!;
+    const rec = model.lanes[lane];
+    if (!rec) fail(`unknown lane: ${lane}`);
     for (const child of childrenOf(model, lane)) model.lanes[child]!.parent = rec.parent;
-    removeTree(root, join(workspacePath, lane));
+    for (const repo of Object.keys(rec.repos)) removeWorktreeDir(root, worktreePath(workspacePath, lane, repo));
     delete model.lanes[lane];
   });
 }
@@ -159,14 +184,17 @@ export function removeRepo(root: Root, workspacePath: string, lane: string, repo
   withWorkspace(root, workspacePath, (model) => {
     const rec = model.lanes[lane];
     if (!rec?.repos[repo]) fail(`${repo} is not in lane ${lane}`);
-    removeWorktree(root, join(workspacePath, lane, repo));
+    removeWorktreeDir(root, worktreePath(workspacePath, lane, repo));
     delete rec.repos[repo];
   });
 }
 
+/** Lane of the folder the cwd is in (`<repo>@<lane>`), if that lane exists. */
 export function laneOfCwd(model: WorkspaceModel, rest: string[]): string | undefined {
-  const lane = rest[0];
-  return lane && model.lanes[lane] ? lane : undefined;
+  const folder = rest[0];
+  if (!folder) return undefined;
+  const lane = laneOfFolder(folder);
+  return model.lanes[lane] ? lane : undefined;
 }
 
 export { sourceFromPath };

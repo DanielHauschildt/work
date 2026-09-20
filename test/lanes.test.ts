@@ -25,7 +25,7 @@ afterEach(() => sb.cleanup());
 describe("repo store", () => {
   test("add creates a bare store with fetch refspec and a worktree in lane root", () => {
     const worktree = addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
-    expect(worktree).toBe(join(workspace, "root", "app"));
+    expect(worktree).toBe(join(workspace, "app")); // lane root: no @suffix
     const store = join(sb.root, ".repos", "local", "remotes", "app.git");
     expect(g(store, "config", "--get", "core.bare")).toBe("true");
     expect(g(store, "config", "--get", "remote.origin.fetch")).toBe("+refs/heads/*:refs/remotes/origin/*");
@@ -61,12 +61,13 @@ describe("lanes", () => {
     const rootWorktree = addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
     addRepo(root, workspace, { lane: "root", spec: docs, cwd: sb.dir });
     const tip = commit(rootWorktree, "core.txt", "core");
-    const lanePath = createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
-    expect(lanePath).toBe(join(workspace, "ui"));
-    const ui = join(lanePath, "app");
+    const paths = createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
+    expect(paths).toEqual([join(workspace, "app@ui"), join(workspace, "docs@ui")]);
+    const ui = join(workspace, "app@ui");
     expect(g(ui, "branch", "--show-current")).toBe("IMG-1234-autofit-ui");
     expect(g(ui, "rev-parse", "HEAD")).toBe(tip);
-    expect(existsSync(join(lanePath, "docs"))).toBe(true);
+    expect(existsSync(join(workspace, "docs@ui"))).toBe(true);
+    expect(existsSync(join(workspace, "ui"))).toBe(false); // a lane is not a folder
     const model = loadModel(workspace);
     expect(model.lanes.ui!.parent).toBe("root");
     expect(model.lanes.ui!.repos.app!.base).toBe(tip);
@@ -79,15 +80,17 @@ describe("lanes", () => {
     expect(loadModel(workspace).lanes.guide!.repos.docs!.base).toBe(g(store, "rev-parse", "origin/main"));
   });
 
-  test("agent files describe the workspace and each lane", () => {
+  test("the workspace AGENTS.md lists every lane with its folders; worktrees get none", () => {
     addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
     createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
     const top = readFileSync(join(workspace, "AGENTS.md"), "utf8");
-    expect(top).toContain("| `ui/` | `IMG-1234-autofit-ui` | root | app |");
+    expect(top).toContain("| `root` | `IMG-1234-autofit` | trunk | `app/` |");
+    expect(top).toContain("| `ui` | `IMG-1234-autofit-ui` | root | `app@ui/` |");
+    expect(top).toContain("Work only in your own lane's folders");
     expect(readFileSync(join(workspace, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
-    const lane = readFileSync(join(workspace, "ui", "AGENTS.md"), "utf8");
-    expect(lane).toContain("Stacked on: lane `root`");
-    expect(lane).toContain("Other lanes (off-limits): root");
+    // a generated file inside a worktree would be untracked in the user's repo
+    expect(existsSync(join(workspace, "app@ui", "AGENTS.md"))).toBe(false);
+    expect(existsSync(join(workspace, "app@ui", "CLAUDE.md"))).toBe(false);
   });
 
   test("agent file keeps user content outside the generated block", () => {
@@ -97,7 +100,7 @@ describe("lanes", () => {
     createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
     const text = readFileSync(file, "utf8");
     expect(text).toContain("keep me");
-    expect(text).toContain("`ui/`");
+    expect(text).toContain("`app@ui/`");
     expect(text.match(/work:begin/g)!.length).toBe(1);
   });
 
@@ -109,18 +112,19 @@ describe("lanes", () => {
     const model = loadModel(workspace);
     expect(model.lanes.ui).toBeUndefined();
     expect(model.lanes.polish!.parent).toBe("root");
-    expect(existsSync(join(workspace, "ui"))).toBe(false);
+    expect(existsSync(join(workspace, "app@ui"))).toBe(false);
+    expect(existsSync(join(workspace, "app@polish"))).toBe(true);
     const store = join(sb.root, ".repos", "local", "remotes", "app.git");
     expect(g(store, "branch", "--list", "IMG-1234-autofit-ui")).toContain("IMG-1234-autofit-ui");
-    expect(g(store, "worktree", "list")).not.toContain("/ui/");
+    expect(g(store, "worktree", "list")).not.toContain("app@ui");
   });
 
   test("removing a repo from a lane removes only that worktree", () => {
     addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
     addRepo(root, workspace, { lane: "root", spec: docs, cwd: sb.dir });
     removeRepo(root, workspace, "root", "docs");
-    expect(existsSync(join(workspace, "root", "docs"))).toBe(false);
-    expect(existsSync(join(workspace, "root", "app"))).toBe(true);
+    expect(existsSync(join(workspace, "docs"))).toBe(false);
+    expect(existsSync(join(workspace, "app"))).toBe(true);
     expect(Object.keys(loadModel(workspace).lanes.root!.repos)).toEqual(["app"]);
   });
 

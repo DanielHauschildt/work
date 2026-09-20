@@ -120,7 +120,7 @@ function parseFrames(out: string, normalFooter: RegExp): { preamble: string[]; f
 }
 
 const TRY_FOOTER = /↑↓: Navigate {2}Enter: Select {2}Ctrl-T: New {2}Ctrl-D: Delete {2}Esc: Cancel/;
-const WORK_FOOTER = /↑↓ Enter {2}→ Lanes {2}\^T New {2}\^D Delete {2}\^R Move {2}Tab Space {2}Esc/;
+const WORK_FOOTER = /↑↓ Enter {2}→ Worktrees {2}\^T New {2}\^D Delete {2}\^R Move {2}Tab Space {2}Esc/;
 
 async function compare(dir: string, o: Opts): Promise<void> {
   const t = parseFrames(runTry(dir, o), TRY_FOOTER);

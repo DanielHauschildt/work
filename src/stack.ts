@@ -14,7 +14,7 @@ import {
   topoLanes,
   type WorkspaceModel,
 } from "./model.ts";
-import { parseGitUri } from "./naming.ts";
+import { parseGitUri, worktreeDir } from "./naming.ts";
 import { fetchStore, type RepoSource, sourceFromPath, trunkBranchName, trunkRef } from "./repos.ts";
 import type { Root } from "./root.ts";
 
@@ -124,7 +124,7 @@ export function sync(root: Root, workspacePath: string, opts: SyncOptions = {}):
     if (opts.abort) {
       const cur = model.sync?.pending[0];
       if (!cur) fail("no sync in progress");
-      const worktree = join(workspacePath, cur[0], cur[1]);
+      const worktree = join(workspacePath, worktreeDir(cur[0], cur[1]));
       if (isRebasing(worktree)) git(worktree, ["rebase", "--abort"]);
       model.sync = null;
       save();
@@ -138,7 +138,7 @@ export function sync(root: Root, workspacePath: string, opts: SyncOptions = {}):
       if (!model.sync?.pending.length) fail("no sync in progress");
       queue = model.sync.pending;
       const [lane, repo] = queue[0]!;
-      const worktree = join(workspacePath, lane, repo);
+      const worktree = join(workspacePath, worktreeDir(lane, repo));
       if (isRebasing(worktree)) {
         const unmerged = gitTry(worktree, ["diff", "--name-only", "--diff-filter=U"]) ?? "";
         if (unmerged) fail(`conflicts remain in ${worktree}:\n${unmerged}\nResolve them, \`git add\`, then \`work sync --continue\`.`);
@@ -166,7 +166,7 @@ export function sync(root: Root, workspacePath: string, opts: SyncOptions = {}):
       const [lane, repo] = queue[0]!;
       const laneRec = model.lanes[lane]!;
       const rec = laneRec.repos[repo]!;
-      const worktree = join(workspacePath, lane, repo);
+      const worktree = join(workspacePath, worktreeDir(lane, repo));
       const branch = repoBranch(laneRec, repo);
       const report = (result: StepReport["result"], detail?: string) => {
         reports.push({ lane, repo, result, detail });
@@ -249,7 +249,7 @@ export function submit(root: Root, workspacePath: string, opts: SubmitOptions = 
       const laneRec: LaneRec = model.lanes[lane]!;
       const rec = laneRec.repos[repo]!;
       const src = sourceFromPath(rec.source);
-      const worktree = join(workspacePath, lane, repo);
+      const worktree = join(workspacePath, worktreeDir(lane, repo));
       const branch = repoBranch(laneRec, repo);
       const push = (result: StepReport["result"], detail?: string, pr?: number) => {
         reports.push({ lane, repo, result, detail, pr });

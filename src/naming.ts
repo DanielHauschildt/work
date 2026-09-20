@@ -48,6 +48,17 @@ export function stripDate(name: string): string {
   return name.replace(DATE_PREFIX, "");
 }
 
+/** Worktree folder inside a workspace: `<repo>` in lane `root`, `<repo>@<lane>` in any other lane. */
+export function worktreeDir(lane: string, repo: string): string {
+  return lane === ROOT_LANE ? repo : `${repo}@${lane}`;
+}
+
+/** Lane a worktree folder belongs to: the part after its `@`, else lane `root`. */
+export function laneOfFolder(folder: string): string {
+  const at = folder.lastIndexOf("@");
+  return at > 0 ? folder.slice(at + 1) : ROOT_LANE;
+}
+
 /** Branch for a lane: workspace name without date; lanes other than root append `-<lane>`. */
 export function laneBranch(workspaceName: string, lane: string): string {
   const base = sanitizeRef(stripDate(workspaceName));
@@ -69,6 +80,9 @@ export function sanitizeRef(s: string): string {
 }
 
 export const LANE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** The base lane; its worktrees have no `@` suffix. */
+export const ROOT_LANE = "root";
 
 // --- try compatible helpers -------------------------------------------------
 

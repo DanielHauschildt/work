@@ -27,12 +27,15 @@ import {
   removeLane,
   removeRepo,
   removeTree,
+  requireFlatLayout,
+  worktreePath,
 } from "./lanes.ts";
-import { hasModel, loadModel, repoBranch, topoLanes } from "./model.ts";
-import { cloneDirName, dashify, isGitUri, spaceName, today, versionedBase } from "./naming.ts";
+import { migrateWorkspace } from "./migrate.ts";
+import { hasModel, loadModel, repoBranch, topoLanes, type WorkspaceModel } from "./model.ts";
+import { cloneDirName, dashify, isGitUri, laneOfFolder, spaceName, today, versionedBase, worktreeDir } from "./naming.ts";
 import { expandHome, isInside, real, Root, type WorkspaceInfo } from "./root.ts";
 import { parentRefOf, submit, sync } from "./stack.ts";
-import { type CreateOption, formatRelativeTime, type LaneRow, parseTestKeys, type PickerItem, runPicker } from "./tui/index.ts";
+import { type CreateOption, formatRelativeTime, parseTestKeys, type PickerItem, runPicker, type WorktreeRow } from "./tui/index.ts";
 
 export const VERSION = "0.1.0";
 const DEFAULT_SPACE = "tries";
@@ -77,15 +80,16 @@ Usage:
   work - | work back               Previous workspace
   work . <name> | ./path [name]    New workspace with a worktree of that repo
   work clone <url> [name] | <url>  New workspace with a worktree of <url>
-  work path <query> [lane]         Print the path of a workspace (or lane)
+  work path <query> [folder]       Print the path of a workspace (or one of its worktrees)
   work ls [--space S] [--json] [--stale] [--archived]
   work space [ls | new <name> [--prefix P] | set <name> --prefix P]
   work info [workspace] [--json]   Lanes, branches, parents, status, PRs
-  work add <repo|url|path> [branch] [--lane L]
-  work lane <name> [repos…] [--on <lane>|trunk]
+  work add <repo|url|path> [branch] [--lane L]     Worktree <repo>[@<lane>] in the workspace
+  work lane <name> [repos…] [--on <lane>|trunk]    Stacked lane: <repo>@<name> per repo
+  work migrate [workspace | --all] [--force]       Convert <lane>/<repo> folders to <repo>@<lane>
   work mv [workspace] <space>[/<name>] [--prefix P]
   work archive [workspace] | work unarchive <workspace>
-  work rm <workspace>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]
+  work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]
   work sync [--continue|--abort]   Restack lanes onto their parents
   work submit [--draft]            Push lanes, open/update stacked PRs (gh)
   work init [path] [--shortcut NAME[=SPACE]]…
@@ -100,8 +104,8 @@ Options:
 Picker keys: ↑↓/Ctrl-P/N navigate, Enter select/create, Ctrl-T new, Ctrl-D delete, Ctrl-R move,
              Tab/Shift-Tab switch space (last tab: + new space), Ctrl-A/E/B/F/K/W edit, Esc cancel
              Type space/name to filter or create in another (or a new) space.
-             → on a workspace: its lanes. Enter cd into a lane, type a name + Enter/Ctrl-T for a new lane
-             (on the highlighted one), Ctrl-D remove a lane, ← back.
+             → on a workspace: its worktrees grouped by lane. Enter cd into one, type a name + Enter/Ctrl-T
+             for a new lane (on the highlighted row's lane), Ctrl-D remove that lane, ← back.
 `;
 }
 
@@ -150,9 +154,9 @@ function badgesFor(workspacePath: string): string | undefined {
   return lanes.length === 1 && lanes[0] === DEFAULT_LANE ? repos.join(" ") : `${lanes.length} lanes: ${repos.join(" ")}`;
 }
 
-/** Any worktree below `dir` (a workspace or a lane) with uncommitted changes. */
+/** Any worktree in `dir` (a workspace) or `dir` itself (a worktree) with uncommitted changes. */
 async function asyncDirty(dir: string): Promise<boolean> {
-  for (const c of findWorktrees(dir, 2)) {
+  for (const c of existsSync(join(dir, ".git")) ? [dir] : findWorktrees(dir, 2)) {
     const p = Bun.spawn(["git", "-C", c, "status", "--porcelain"], { stdout: "pipe", stderr: "ignore" });
     const text = await new Response(p.stdout).text();
     if (text.trim()) return true;
@@ -160,13 +164,25 @@ async function asyncDirty(dir: string): Promise<boolean> {
   return false;
 }
 
-/** Lanes of a workspace for the picker's lane view (parents first, like `work info`). */
-function laneRows(workspacePath: string): LaneRow[] {
+/** Worktrees of a workspace for the picker, grouped by lane (parents first, like `work info`). */
+function worktreeRows(workspacePath: string): WorktreeRow[] {
   const model = loadModel(workspacePath);
-  return topoLanes(model).map((name) => {
-    const lane = model.lanes[name]!;
-    const path = join(workspacePath, name);
-    return { name, path, branch: lane.branch, parent: lane.parent, repos: Object.keys(lane.repos), dirty: () => asyncDirty(path) };
+  return topoLanes(model).flatMap((lane) => {
+    const rec = model.lanes[lane]!;
+    const repos = Object.keys(rec.repos).sort();
+    // a lane without repos still gets a row, so it can be seen, stacked on and removed
+    if (!repos.length) return [{ folder: "", lane, path: workspacePath, branch: rec.branch, parent: rec.parent }];
+    return repos.map((repo) => {
+      const path = worktreePath(workspacePath, lane, repo);
+      return {
+        folder: basename(path),
+        lane,
+        path,
+        branch: repoBranch(rec, repo),
+        parent: rec.parent,
+        dirty: () => asyncDirty(path),
+      };
+    });
   });
 }
 
@@ -202,7 +218,7 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       badges: badgesFor(e.path),
       stale: days !== undefined && now.getTime() - recency.getTime() > days * 86_400_000,
       dirty: hasModel(e.path) ? () => asyncDirty(e.path) : undefined,
-      lanes: () => laneRows(e.path),
+      worktrees: () => worktreeRows(e.path),
     };
   });
   const defaultSpace = ctx.space ?? here ?? DEFAULT_SPACE;
@@ -261,22 +277,26 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
     }
     case "lane": {
       const space = ctx.root.locate(result.workspace)!.space;
-      const path = createLane(ctx.root, result.workspace, {
+      const model = loadModel(result.workspace);
+      requireFlatLayout(result.workspace, model);
+      const paths = createLane(ctx.root, result.workspace, {
         name: result.name,
         parent: result.parent,
         repos: [],
         cwd: ctx.cwd,
         postAdd: ctx.root.spaceConfig(space).post_add,
       });
-      info(`Lane ${result.name} on ${result.parent ?? "trunk"}: ${path}`);
-      visit(ctx, result.workspace, path);
+      info(`Lane ${result.name} on ${result.parent ?? "trunk"}: ${paths.join(" ") || "no repos yet"}`);
+      visit(ctx, result.workspace, paths[0] ?? result.workspace);
       return 0;
     }
     case "deleteLane": {
-      const dir = join(result.workspace, result.lane);
+      const model = loadModel(result.workspace);
+      requireFlatLayout(result.workspace, model);
+      const dirs = Object.keys(model.lanes[result.lane]?.repos ?? {}).map((r) => join(result.workspace, worktreeDir(result.lane, r)));
       removeLane(ctx.root, result.workspace, result.lane);
-      info(`Deleted ${relative(ctx.root.path, dir)}`);
-      if (isInside(ctx.cwd, dir)) ctx.emit.cd(result.workspace);
+      info(`Deleted lane ${result.lane} of ${relative(ctx.root.path, result.workspace)}`);
+      if (dirs.some((d) => isInside(ctx.cwd, d))) ctx.emit.cd(result.workspace);
       return 0;
     }
   }
@@ -390,16 +410,25 @@ function cmdDot(ctx: Ctx, pathArg: string, customParts: string[]): number {
 }
 
 function cmdPath(ctx: Ctx, args: string[]): number {
-  const [query, lane] = args;
-  if (!query) fail("usage: work path <query> [lane]");
+  const [query, folder] = args;
+  if (!query) fail("usage: work path <query> [<repo>[@<lane>] | <lane>]");
   const workspace = resolveWorkspace(ctx.root, query, ctx.cwd, { space: ctx.space, first: ctx.first });
   let path = workspace.path;
-  if (lane) {
-    path = join(workspace.path, lane);
-    if (!existsSync(path)) fail(`no lane ${lane} in ${workspace.space}/${workspace.name}`);
-  }
+  if (folder) path = worktreeOf(workspace, folder);
   out(ctx.json ? JSON.stringify({ space: workspace.space, name: workspace.name, path }) : path);
   return 0;
+}
+
+/** `<repo>@<lane>` / `<repo>` as typed, or a bare lane name when exactly one worktree is in it. */
+function worktreeOf(workspace: WorkspaceInfo, folder: string): string {
+  const direct = join(workspace.path, folder);
+  if (existsSync(direct)) return direct;
+  const model = loadModel(workspace.path);
+  const lane = model.lanes[folder];
+  const repos = lane ? Object.keys(lane.repos).sort() : [];
+  if (repos.length === 1) return worktreePath(workspace.path, folder, repos[0]!);
+  if (repos.length > 1) fail(`lane ${folder} has several worktrees: ${repos.map((r) => worktreeDir(folder, r)).join(", ")}`);
+  fail(`no ${folder} in ${workspace.space}/${workspace.name}`);
 }
 
 function cmdLs(ctx: Ctx): number {
@@ -446,9 +475,8 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
       name,
       branch: l.branch,
       parent: l.parent,
-      path: join(workspace.path, name),
       repos: Object.entries(l.repos).map(([repo, rec]) => {
-        const worktree = join(workspace.path, name, repo);
+        const worktree = worktreePath(workspace.path, name, repo);
         const exists = existsSync(worktree);
         const st = exists ? worktreeStatus(worktree) : undefined;
         let parentRef: string | undefined;
@@ -463,6 +491,7 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
         }
         return {
           repo,
+          folder: basename(worktree),
           path: worktree,
           exists,
           branch: repoBranch(l, repo),
@@ -489,7 +518,8 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
   out(`${workspace.space}/${workspace.name}  ${workspace.path}`);
   if (!lanes.length) out("  (no lanes — `work add <repo>` creates lane root)");
   for (const l of lanes) {
-    out(`  ${l.name}/  ${l.branch}  on ${l.parent ?? "trunk"}`);
+    out(`  ${l.name}  ${l.branch}  on ${l.parent ?? "trunk"}`);
+    if (!l.repos.length) out("    (no worktrees — `work add <repo> --lane " + l.name + "`)");
     for (const r of l.repos) {
       const flags = [
         r.dirty && "dirty",
@@ -499,7 +529,7 @@ function cmdInfo(ctx: Ctx, args: string[]): number {
         r.pr && `PR #${r.pr}${r.merged ? " merged" : ""}`,
         !r.exists && "missing",
       ].filter(Boolean);
-      out(`    ${r.repo}  ${r.branch}${flags.length ? `  (${flags.join(", ")})` : ""}`);
+      out(`    ${r.folder}/  ${r.branch}${flags.length ? `  (${flags.join(", ")})` : ""}`);
     }
   }
   if (model.sync) out(`  sync in progress: stopped at ${model.sync.pending[0]?.join("/")}`);
@@ -511,6 +541,7 @@ function cmdAdd(ctx: Ctx, args: string[]): number {
   if (!spec) fail("usage: work add <repo|url|path> [branch] [--lane L]");
   const { workspace, rest } = currentWorkspace(ctx);
   const model = loadModel(workspace.path);
+  requireFlatLayout(workspace.path, model);
   const current = laneOfCwd(model, rest);
   const lane = ctx.lane ?? current ?? DEFAULT_LANE;
   const parent = model.lanes[lane] ? undefined : ctx.on === "trunk" ? null : (ctx.on ?? (lane === DEFAULT_LANE ? null : (current ?? null)));
@@ -531,11 +562,15 @@ function cmdLane(ctx: Ctx, args: string[]): number {
   if (!name) fail("usage: work lane <name> [repos…] [--on <lane>|trunk]");
   const { workspace, rest } = currentWorkspace(ctx);
   const model = loadModel(workspace.path);
-  const parent = ctx.on === "trunk" ? null : (ctx.on ?? laneOfCwd(model, rest) ?? null);
-  const path = createLane(ctx.root, workspace.path, { name, parent, repos, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(workspace.space).post_add });
-  ctx.emit.cd(path);
-  if (ctx.json) out(JSON.stringify({ lane: name, parent, path }));
-  else if (ctx.emit.mode === "file") info(`Lane ${name} on ${parent ?? "trunk"}: ${path}`);
+  requireFlatLayout(workspace.path, model);
+  // in a worktree: its lane; at the workspace root: the base lane (its worktrees are the ones you see there)
+  const here = laneOfCwd(model, rest) ?? (model.lanes[DEFAULT_LANE] ? DEFAULT_LANE : null);
+  const parent = ctx.on === "trunk" ? null : (ctx.on ?? here);
+  const paths = createLane(ctx.root, workspace.path, { name, parent, repos, cwd: ctx.cwd, postAdd: ctx.root.spaceConfig(workspace.space).post_add });
+  ctx.emit.cd(paths[0] ?? workspace.path);
+  if (ctx.json) out(JSON.stringify({ lane: name, parent, paths }));
+  else if (ctx.emit.mode === "direct") for (const path of paths.slice(1)) out(path); // the first one is the cd target
+  else info(`Lane ${name} on ${parent ?? "trunk"}: ${paths.join(" ") || "no worktrees yet"}`);
   return 0;
 }
 
@@ -586,22 +621,85 @@ function cmdRm(ctx: Ctx, args: string[]): number {
     rest = parts.slice(1);
   }
   if (rest.length > 2) fail(`too many path parts in ${target}`);
-  const dir = join(workspace.path, ...rest);
-  if (!existsSync(dir)) fail(`${dir} does not exist`);
-  const warnings = removalWarnings(dir);
+  const { dirs, remove, label } = removalTarget(ctx, workspace, rest);
+  for (const dir of dirs) if (!existsSync(dir)) fail(`${dir} does not exist`);
+  const warnings = dirs.flatMap((d) => removalWarnings(d));
   if (warnings.length && !ctx.force) fail(`refusing to delete (use --force):\n${warnings.join("\n")}`);
-  const label = [`${workspace.space}/${workspace.name}`, ...rest].join("/");
   confirmYes(ctx, `Delete ${label}?`, warnings);
-  if (rest.length === 0) deleteWorkspaces(ctx.root, [workspace.path], { force: true });
-  else if (rest.length === 1) removeLane(ctx.root, workspace.path, rest[0]!);
-  else removeRepo(ctx.root, workspace.path, rest[0]!, rest[1]!);
+  remove();
   info(`Deleted ${label}`);
-  if (isInside(ctx.cwd, dir)) ctx.emit.cd(resolve(dir, ".."));
+  const inside = dirs.find((d) => isInside(ctx.cwd, d));
+  if (inside) ctx.emit.cd(rest.length ? workspace.path : resolve(inside, ".."));
+  return 0;
+}
+
+/**
+ * What `work rm <workspace>[/…]` deletes: the workspace, a whole lane (all its worktrees), or one worktree
+ * (`<lane>/<repo>`, or a folder name like `docs@ui`).
+ */
+function removalTarget(
+  ctx: Ctx,
+  workspace: WorkspaceInfo,
+  rest: string[],
+): { dirs: string[]; remove: () => void; label: string } {
+  const root = ctx.root;
+  const name = `${workspace.space}/${workspace.name}`;
+  if (rest.length === 0) {
+    return { dirs: [workspace.path], remove: () => deleteWorkspaces(root, [workspace.path], { force: true }), label: name };
+  }
+  const model = loadModel(workspace.path);
+  const one = (lane: string, repo: string) => {
+    if (!model.lanes[lane]?.repos[repo]) fail(`${repo} is not in lane ${lane} of ${name}`);
+    return {
+      dirs: [worktreePath(workspace.path, lane, repo)],
+      remove: () => removeRepo(root, workspace.path, lane, repo),
+      label: `${name}/${worktreeDir(lane, repo)}`,
+    };
+  };
+  if (rest.length === 2) return one(rest[0]!, rest[1]!);
+  const target = rest[0]!;
+  // a lane name (no "@") removes the whole lane; a folder name removes that one worktree
+  if (!target.includes("@") && model.lanes[target]) {
+    requireFlatLayout(workspace.path, model);
+    const repos = Object.keys(model.lanes[target]!.repos).sort();
+    return {
+      dirs: repos.map((r) => join(workspace.path, worktreeDir(target, r))),
+      remove: () => removeLane(root, workspace.path, target),
+      label: `${name} lane ${target}`,
+    };
+  }
+  const lane = laneOfFolder(target);
+  const repo = lane === DEFAULT_LANE ? target : target.slice(0, -(lane.length + 1));
+  if (!model.lanes[lane]?.repos[repo]) fail(`no lane or worktree ${target} in ${name}`);
+  return one(lane, repo);
+}
+
+/** Convert old `<lane>/<repo>` folders to `<repo>[@<lane>]`; follows the cwd into the moved worktree. */
+function cmdMigrate(ctx: Ctx, args: string[]): number {
+  const paths = ctx.flags.has("--all")
+    ? ctx.root.allWorkspaces().filter((w) => hasModel(w.path)).map((w) => w.path)
+    : [resolveWorkspace(ctx.root, args[0] ?? ".", ctx.cwd, { space: ctx.space, first: ctx.first }).path];
+  const here = ctx.root.locate(ctx.cwd);
+  const reports = paths.map((path) => migrateWorkspace(ctx.root, path, { force: ctx.force }));
+  if (here && here.rest.length >= 2 && paths.includes(here.workspacePath)) {
+    const moved = join(here.workspacePath, worktreeDir(here.rest[0]!, here.rest[1]!), ...here.rest.slice(2));
+    if (existsSync(moved)) ctx.emit.cd(moved);
+  }
+  if (ctx.json) {
+    out(JSON.stringify(reports, null, 2));
+    return 0;
+  }
+  for (const r of reports) {
+    if (r.moved.length) info(`${relative(ctx.root.path, r.workspace)}: ${r.moved.map((m) => basename(m)).join(", ")}`);
+    for (const dir of r.keptFolders) info(`kept ${dir} (not empty; --force deletes it)`);
+  }
+  if (!reports.some((r) => r.moved.length)) info("Nothing to migrate.");
   return 0;
 }
 
 function cmdSync(ctx: Ctx): number {
   const { workspace } = currentWorkspace(ctx);
+  requireFlatLayout(workspace.path, loadModel(workspace.path));
   const reports = sync(ctx.root, workspace.path, { continue: ctx.flags.has("--continue"), abort: ctx.flags.has("--abort") });
   if (ctx.json) out(JSON.stringify(reports, null, 2));
   return 0;
@@ -609,6 +707,7 @@ function cmdSync(ctx: Ctx): number {
 
 function cmdSubmit(ctx: Ctx): number {
   const { workspace } = currentWorkspace(ctx);
+  requireFlatLayout(workspace.path, loadModel(workspace.path));
   const reports = submit(ctx.root, workspace.path, { draft: ctx.flags.has("--draft") });
   if (ctx.json) out(JSON.stringify(reports, null, 2));
   return 0;
@@ -691,7 +790,7 @@ export async function main(argv: string[]): Promise<number> {
     yes: takeFlag(args, "--yes", "-y"),
     force: takeFlag(args, "--force", "-f"),
     first: takeFlag(args, "--first"),
-    flags: new Set(["--continue", "--abort", "--draft", "--stale", "--archived"].filter((f) => takeFlag(args, f))),
+    flags: new Set(["--continue", "--abort", "--draft", "--stale", "--archived", "--all"].filter((f) => takeFlag(args, f))),
     test: {
       type: takeOption(args, "--and-type"),
       exit: takeFlag(args, "--and-exit"),
@@ -762,6 +861,9 @@ export async function main(argv: string[]): Promise<number> {
       break;
     case "rm":
       code = cmdRm(ctx, args);
+      break;
+    case "migrate":
+      code = cmdMigrate(ctx, args);
       break;
     case "sync":
       code = cmdSync(ctx);

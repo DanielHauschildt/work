@@ -1,5 +1,6 @@
 import { basename } from "node:path";
-import { hasModel, loadModel } from "./model.ts";
+import { hasModel, loadModel, repoBranch } from "./model.ts";
+import { worktreeDir } from "./naming.ts";
 import { listStores, storeLabel } from "./repos.ts";
 import type { Root } from "./root.ts";
 import { calculateScore } from "./tui/index.ts";
@@ -25,6 +26,7 @@ export const SUBCOMMANDS: Record<string, string> = {
   clone: "new workspace from a git URL",
   back: "go to the previous workspace",
   init: "print shell integration",
+  migrate: "convert lane folders to <repo>@<lane>",
   space: "list, create or configure spaces",
 };
 
@@ -67,6 +69,16 @@ function laneCandidates(root: Root, cwd: string): Candidate[] {
   if (!loc || !hasModel(loc.workspacePath)) return [];
   const model = loadModel(loc.workspacePath);
   return Object.entries(model.lanes).map(([n, l]) => ({ value: n, desc: l.branch }));
+}
+
+/** Worktree folders of the workspace the cwd is in: `cesdk-web`, `cesdk-web@ui`, … */
+function worktreeCandidates(root: Root, cwd: string): Candidate[] {
+  const loc = root.locate(cwd);
+  if (!loc || !hasModel(loc.workspacePath)) return [];
+  const model = loadModel(loc.workspacePath);
+  return Object.entries(model.lanes).flatMap(([lane, l]) =>
+    Object.keys(l.repos).map((repo) => ({ value: worktreeDir(lane, repo), desc: repoBranch(l, repo) })),
+  );
 }
 
 function storeCandidates(root: Root): Candidate[] {
@@ -138,11 +150,18 @@ export function complete(root: Root, opts: { cmd: string; space?: string; words:
       if (argIndex === 1) return filter(root.spaces().map((s) => ({ value: `${s}/`, desc: "space" })), cur);
       return [];
     case "rm":
-      return filter([...laneCandidates(root, opts.cwd).map((c) => ({ value: `./${c.value}`, desc: "lane" })), ...workspaceCandidates(root, space)], cur);
+      return filter(
+        [
+          ...laneCandidates(root, opts.cwd).map((c) => ({ value: `./${c.value}`, desc: "lane" })),
+          ...worktreeCandidates(root, opts.cwd).map((c) => ({ value: `./${c.value}`, desc: c.desc })),
+          ...workspaceCandidates(root, space),
+        ],
+        cur,
+      );
     case "archive":
     case "path":
     case "info":
-      return argIndex === 0 ? filter(workspaceCandidates(root, space), cur) : sub === "path" ? filter(laneCandidates(root, opts.cwd), cur) : [];
+      return argIndex === 0 ? filter(workspaceCandidates(root, space), cur) : sub === "path" ? filter(worktreeCandidates(root, opts.cwd), cur) : [];
     case "space":
       if (argIndex === 0) return filter([{ value: "ls" }, { value: "new" }, { value: "set" }], cur);
       if (argIndex === 1 && positional[1] === "set") return filter(root.spaces().map((s) => ({ value: s })), cur);
