@@ -164,6 +164,10 @@ describe("lanes", () => {
     expect(() => createLane(root, workspace, { name: "mixed", parent: "root", repos: [], cwd: sb.dir })).toThrow(
       "lane mixed already exists with 1 of 2 worktrees: add the rest with `work add docs --lane mixed`, or drop the lane with `work rm ./mixed`",
     );
+    // a lane that has everything its parent has just says so
+    expect(() => createLane(root, workspace, { name: "blocked", parent: "root", repos: [app], cwd: sb.dir })).toThrow(
+      /^lane blocked already exists$/,
+    );
   });
 
   test("same branch twice is rejected with a hint", () => {
