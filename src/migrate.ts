@@ -1,10 +1,11 @@
 import { existsSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { writeAgentFiles } from "./agents.ts";
+import { isGeneratedOnly } from "./agents.ts";
 import { fail } from "./errors.ts";
 import { commonDirOf, isLinkedWorktree, isRepoDir, run, worktreeStatus } from "./git.ts";
+import { withWorkspace } from "./lanes.ts";
 import { withLock } from "./lock.ts";
-import { loadModel, saveModel } from "./model.ts";
+import type { WorkspaceModel } from "./model.ts";
 import { worktreeDir } from "./naming.ts";
 import { commonKey, repairWorktree } from "./repos.ts";
 import type { Root } from "./root.ts";
@@ -37,11 +38,15 @@ export interface MigrationReport {
 const GENERATED = ["AGENTS.md", "CLAUDE.md"];
 
 /**
- * Convert `<workspace>/<lane>/<repo>` folders to `<workspace>/<repo>[@<lane>]`. Everything is checked first
- * (dirty worktrees, collisions), so a refusal leaves the workspace untouched.
+ * Convert `<workspace>/<lane>/<repo>` folders to `<workspace>/<repo>[@<lane>]`, under the workspace lock so it
+ * can't race `add`/`lane`/`rm`. Everything is checked first (uncommitted work, collisions), so a refusal leaves
+ * the workspace untouched.
  */
 export function migrateWorkspace(root: Root, workspacePath: string, opts: { force?: boolean } = {}): MigrationReport {
-  const model = loadModel(workspacePath);
+  return withWorkspace(root, workspacePath, (model) => migrate(root, workspacePath, model, opts));
+}
+
+function migrate(root: Root, workspacePath: string, model: WorkspaceModel, opts: { force?: boolean }): MigrationReport {
   // every lane that still has a folder: it either holds worktrees to move, or is an emptied leftover
   const lanes = Object.keys(model.lanes).filter((lane) => {
     const dir = join(workspacePath, lane);
@@ -76,7 +81,8 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
   for (const lane of lanes) {
     const dir = join(workspacePath, lane);
     if (!existsSync(dir)) continue;
-    const left = readdirSync(dir).filter((n) => !GENERATED.includes(n));
+    // an AGENTS.md/CLAUDE.md the user wrote in is theirs; only the untouched generated ones are dropped
+    const left = readdirSync(dir).filter((n) => !(GENERATED.includes(n) && isGeneratedOnly(join(dir, n))));
     if (left.length && !opts.force) {
       report.keptFolders.push(dir);
       continue;
@@ -86,8 +92,6 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
     rmSync(dir, { recursive: true, force: true });
   }
 
-  saveModel(workspacePath, model);
-  writeAgentFiles(root, workspacePath, model);
   return report;
 }
 

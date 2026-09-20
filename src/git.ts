@@ -32,7 +32,8 @@ export function run(cmd: string[], opts: RunOptions = {}): RunResult {
   };
   if (res.code !== 0 && !opts.allowFail) {
     const msg = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
-    throw new WorkError(`${cmd.slice(0, 3).join(" ")}…: ${msg}`);
+    // the whole command, paths included: "git worktree add …" alone never says which worktree failed
+    throw new WorkError(`${cmd.join(" ")}: ${msg}`);
   }
   return res;
 }

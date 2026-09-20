@@ -32,6 +32,8 @@ export interface WorktreeRow {
   /** folder name (`cesdk-web`, `cesdk-web@ui`); "" for a lane without worktrees */
   folder: string;
   lane: string;
+  /** repo name ("" for a lane without worktrees) */
+  repo: string;
   /** absolute worktree path (the workspace itself when there is no worktree) */
   path: string;
   branch: string;
@@ -86,6 +88,9 @@ export type PickerResult =
   | { type: "move"; from: string; to: string }
   /** create lane `name` on `parent` in the workspace at path `workspace` */
   | { type: "lane"; workspace: string; name: string; parent: string | null }
+  /** remove one worktree; when it was its lane's last one, the lane record goes too */
+  | { type: "deleteWorktree"; workspace: string; lane: string; repo: string }
+  /** remove a lane that has no worktrees left to remove */
   | { type: "deleteLane"; workspace: string; lane: string }
   | null;
 
@@ -129,7 +134,7 @@ const PRINTABLE = /^[a-zA-Z0-9\-_. /]$/;
 const ALNUM = /[a-zA-Z0-9]/;
 const EXIT_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGHUP"];
 const HELP = "↑↓ Enter  → Worktrees  ^T New  ^D Delete  ^R Move  Tab Space  Esc";
-const LANE_HELP = "↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc";
+const LANE_HELP = "↑↓ Enter cd  ← Back  ^T New lane  ^D Remove worktree  Esc";
 const NO_DATE = new Date(Number.NaN);
 const HEADER = "📁 work";
 const HEADER_WIDTH = 7; // 📁 is two columns wide
@@ -1124,9 +1129,9 @@ class Picker {
           this.cursorPos = Math.min(this.cursorPos + 1, total - 1);
           break;
         case "\x04": {
-          // Ctrl-D - remove lane
+          // Ctrl-D - remove the highlighted worktree
           if (!highlighted) break;
-          const result = await this.confirmLaneRemoval(item, highlighted, lanes);
+          const result = await this.confirmRowRemoval(item, highlighted, lanes);
           if (result) return result;
           break;
         }
@@ -1243,18 +1248,23 @@ class Picker {
     }
   }
 
-  /** Ctrl-D on a row: YES screen for its whole lane (all worktrees of that lane). */
-  private async confirmLaneRemoval(item: PickerItem, lane: WorktreeRow, lanes: WorktreeRow[]): Promise<PickerResult> {
-    const paths = lanes.filter((l) => l.lane === lane.lane && l.folder !== "").map((l) => l.path);
-    const warnings = this.opts.deleteWarnings?.(paths) ?? [];
-    const folders = paths.length ? paths.map((p) => `${item.basename}/${p.split("/").pop()}`) : [`${item.basename}: lane ${lane.lane}`];
-    const confirmation = await this.askYes(`Remove lane ${lane.lane}`, folders, warnings);
+  /** Ctrl-D on a row: YES screen for that one worktree (its lane goes too when it was the last one). */
+  private async confirmRowRemoval(item: PickerItem, row: WorktreeRow, rows: WorktreeRow[]): Promise<PickerResult> {
+    const empty = row.folder === "";
+    const last = !empty && rows.filter((r) => r.lane === row.lane && r.folder !== "").length === 1;
+    const warnings = empty ? [] : (this.opts.deleteWarnings?.([row.path]) ?? []);
+    const lines = empty ? [`${item.basename}: lane ${row.lane}`] : [`${item.basename}/${row.folder}`];
+    const notes = last ? [`last worktree of lane ${row.lane} — the lane goes with it`] : [];
+    const title = empty ? `Remove lane ${row.lane}` : `Remove worktree ${row.folder}`;
+    const confirmation = await this.askYes(title, lines, [...notes, ...warnings]);
 
     let result: PickerResult = null;
     if (confirmation === "YES") {
       try {
-        for (const p of paths) this.insideRoot(p);
-        result = { type: "deleteLane", workspace: item.path, lane: lane.lane };
+        if (!empty) this.insideRoot(row.path);
+        result = empty
+          ? { type: "deleteLane", workspace: item.path, lane: row.lane }
+          : { type: "deleteWorktree", workspace: item.path, lane: row.lane, repo: row.repo };
       } catch (e) {
         if (!(e instanceof SafetyError)) throw e;
         this.status = `Error: ${e.message}`;

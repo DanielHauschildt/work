@@ -680,7 +680,7 @@ describe("worktree view", () => {
     const path = folder === "" ? ws().path : join(ws().path, folder);
     if (folder !== "") mkdirSync(path, { recursive: true });
     const branch = lane === "root" ? "IMG-1234-autofit" : `IMG-1234-autofit-${lane}`;
-    return { folder, lane, path, branch, parent, ...extra };
+    return { folder, repo, lane, path, branch, parent, ...extra };
   }
   const threeLanes = () => [row("root", null, "cesdk-web"), row("ui", "root", "cesdk-web"), row("guide", "root", "docs")];
   /** labs tab: IMG-1234-autofit (with worktrees) first, IMG-99-labs-thing second */
@@ -705,7 +705,7 @@ describe("worktree view", () => {
       "  📁 cesdk-web@ui  IMG-1234-autofit-ui     on root",
       "  📁 docs@guide    IMG-1234-autofit-guide  on root",
     ]);
-    expect(f).toContain("\n↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc\n");
+    expect(f).toContain("\n↑↓ Enter cd  ← Back  ^T New lane  ^D Remove worktree  Esc\n");
     expect(out).toContain("\x1b[1;38;5;208m📁 work\x1b[0m\x1b[39m\x1b[49m\x1b[90m › labs › \x1b[39m\x1b[1mIMG-1234-autofit\x1b[0m");
   });
 
@@ -775,7 +775,7 @@ describe("worktree view", () => {
     expect(p).toContain("\nInvalid lane name: a/b\n");
   });
 
-  test("Ctrl-D + YES removes the row's lane with all its worktrees", async () => {
+  test("Ctrl-D + YES removes the highlighted worktree only", async () => {
     const seen: string[][] = [];
     const twoRepos = () => [row("root", null, "cesdk-web"), row("ui", "root", "cesdk-web"), row("ui", "root", "docs")];
     const { result, out } = await run(["\x1b[C", "\x1b[B", "\x04", ..."YES", "\r"], {
@@ -784,11 +784,27 @@ describe("worktree view", () => {
         return ["cesdk-web@ui: uncommitted changes"];
       },
     }, twoRepos);
-    expect(result).toEqual({ type: "deleteLane", workspace: ws().path, lane: "ui" });
-    expect(seen).toEqual([[join(ws().path, "cesdk-web@ui"), join(ws().path, "docs@ui")]]);
+    expect(result).toEqual({ type: "deleteWorktree", workspace: ws().path, lane: "ui", repo: "cesdk-web" });
+    expect(seen).toEqual([[join(ws().path, "cesdk-web@ui")]]);
     expect(plain(out)).toContain(
-      "Remove lane ui\n  📁 IMG-1234-autofit/cesdk-web@ui\n  📁 IMG-1234-autofit/docs@ui\n  cesdk-web@ui: uncommitted changes\nType YES to confirm deletion: ",
+      "Remove worktree cesdk-web@ui\n  📁 IMG-1234-autofit/cesdk-web@ui\n  cesdk-web@ui: uncommitted changes\nType YES to confirm deletion: ",
+
     );
+  });
+
+  test("the lane's last worktree says the lane goes with it", async () => {
+    const { result, out } = await run(["\x1b[C", "\x1b[B", "\x04", ..."YES", "\r"]);
+    expect(result).toEqual({ type: "deleteWorktree", workspace: ws().path, lane: "ui", repo: "cesdk-web" });
+    expect(plain(out)).toContain(
+      "Remove worktree cesdk-web@ui\n  📁 IMG-1234-autofit/cesdk-web@ui\n  last worktree of lane ui — the lane goes with it\n",
+    );
+  });
+
+  test("Ctrl-D on a lane without worktrees removes the lane record", async () => {
+    const rows = () => [row("root", null, "cesdk-web"), row("spike", "root", "")];
+    const { result, out } = await run(["\x1b[C", "\x1b[B", "\x04", ..."YES", "\r"], {}, rows);
+    expect(result).toEqual({ type: "deleteLane", workspace: ws().path, lane: "spike" });
+    expect(plain(out)).toContain("Remove lane spike\n  📁 IMG-1234-autofit: lane spike\nType YES to confirm deletion: ");
   });
 
   test("a wrong confirmation keeps the lane", async () => {

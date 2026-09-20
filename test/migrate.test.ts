@@ -107,6 +107,42 @@ describe("migrate", () => {
     expect(readFileSync(join(workspace, "root-scratch", "x.txt"), "utf8")).toBe("deep\n");
   });
 
+  test("an AGENTS.md the user wrote in is rescued; an untouched one is dropped", () => {
+    addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
+    createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir });
+    toOldLayout("root", "app");
+    toOldLayout("ui", "app");
+    // the generated files toOldLayout wrote: leave root's alone, add notes to ui's
+    writeFileSync(join(workspace, "ui", "AGENTS.md"), `${readFileSync(join(workspace, "ui", "AGENTS.md"), "utf8")}\n## Notes\nkeep me\n`);
+    writeFileSync(join(workspace, "ui", "CLAUDE.md"), "@AGENTS.md\n@extra.md\n");
+
+    const report = migrateWorkspace(root, workspace);
+    expect(report.keptFolders).toEqual([join(workspace, "ui")]); // its files are not ours to delete
+    expect(existsSync(join(workspace, "root"))).toBe(false); // purely generated ones go
+
+    const forced = migrateWorkspace(root, workspace, { force: true });
+    expect(forced.rescued.sort()).toEqual([join(workspace, "ui-AGENTS.md"), join(workspace, "ui-CLAUDE.md")]);
+    expect(readFileSync(join(workspace, "ui-AGENTS.md"), "utf8")).toContain("keep me");
+    expect(readFileSync(join(workspace, "ui-CLAUDE.md"), "utf8")).toContain("@extra.md");
+    expect(existsSync(join(workspace, "ui"))).toBe(false);
+  });
+
+  test("a worktree the model doesn't know is rescued, not deleted", () => {
+    addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
+    toOldLayout("root", "app");
+    // someone ran `git worktree add` by hand inside the lane folder
+    const stray = join(workspace, "root", "stray");
+    sh(["git", "-C", join(workspace, "root", "app"), "worktree", "add", "-q", "-b", "stray-branch", stray]);
+
+    const kept = migrateWorkspace(root, workspace);
+    expect(kept.keptFolders).toEqual([join(workspace, "root")]);
+
+    const forced = migrateWorkspace(root, workspace, { force: true });
+    expect(forced.rescued).toEqual([join(workspace, "root-stray")]);
+    expect(g(join(workspace, "root-stray"), "rev-parse", "--abbrev-ref", "HEAD")).toBe("stray-branch");
+    expect(g(join(workspace, "root-stray"), "status", "--porcelain")).toBe(""); // repaired, still usable
+  });
+
   test("a repo folder named like a lane is left alone", () => {
     const ui = makeRemote(sb, "ui");
     addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });

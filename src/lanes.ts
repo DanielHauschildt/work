@@ -1,7 +1,7 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { writeAgentFiles } from "./agents.ts";
-import { fail } from "./errors.ts";
+import { errorMessage, fail } from "./errors.ts";
 import { findWorktrees, isRepoDir, worktreeStatus } from "./git.ts";
 import { withLock } from "./lock.ts";
 import { LANE_NAME, laneBranch, laneOfFolder, ROOT_LANE, worktreeDir } from "./naming.ts";
@@ -106,7 +106,23 @@ export function createLane(root: Root, workspacePath: string, opts: LaneOptions)
     const parent = opts.parent ? model.lanes[opts.parent] : undefined;
     return parent ? Object.values(parent.repos).map((r) => r.source) : [];
   });
-  return specs.map((spec) => addRepo(root, workspacePath, { lane: opts.name, spec, cwd: opts.cwd, postAdd: opts.postAdd }));
+  const created: string[] = [];
+  try {
+    for (const spec of specs) created.push(addRepo(root, workspacePath, { lane: opts.name, spec, cwd: opts.cwd, postAdd: opts.postAdd }));
+  } catch (e) {
+    // nothing was created: drop the lane again. Some worktrees exist: keep it, but say how to go on.
+    const kept = withWorkspace(root, workspacePath, (model) => {
+      const count = Object.keys(model.lanes[opts.name]?.repos ?? {}).length;
+      if (count === 0) delete model.lanes[opts.name];
+      return count;
+    });
+    if (kept === 0) throw e;
+    fail(
+      `${errorMessage(e)}\nLane ${opts.name} has ${kept} of ${specs.length} worktrees: add the rest with ` +
+        `\`work add <repo> --lane ${opts.name}\`, or drop the lane with \`work rm ./${opts.name}\`.`,
+    );
+  }
+  return created;
 }
 
 /** Worktree folder of a repo: flat `<repo>[@<lane>]`, or the legacy `<lane>/<repo>` folder while it exists. */
@@ -117,11 +133,17 @@ export function worktreePath(workspacePath: string, lane: string, repo: string):
   return existsSync(legacy) ? legacy : flat;
 }
 
-/** Lanes whose worktrees still sit in a `<lane>/<repo>` folder (the layout before `<repo>@<lane>`). */
+/**
+ * Lanes whose worktrees still sit in a `<lane>/<repo>` folder (the layout before `<repo>@<lane>`). A folder is
+ * only a lane folder when it is not a worktree itself and holds a repo of that lane — otherwise a repo named
+ * like a lane (with a subfolder named like another repo) would look like the old layout forever.
+ */
 export function legacyLanes(workspacePath: string, model: WorkspaceModel): string[] {
-  return Object.keys(model.lanes).filter((lane) =>
-    Object.keys(model.lanes[lane]!.repos).some((repo) => existsSync(join(workspacePath, lane, repo))),
-  );
+  return Object.keys(model.lanes).filter((lane) => {
+    const dir = join(workspacePath, lane);
+    if (!existsSync(dir) || isRepoDir(dir)) return false;
+    return Object.keys(model.lanes[lane]!.repos).some((repo) => isRepoDir(join(dir, repo)));
+  });
 }
 
 /** Refuse to touch a workspace that `work migrate` hasn't converted yet. */

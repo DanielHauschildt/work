@@ -107,7 +107,8 @@ Picker keys: ↑↓/Ctrl-P/N navigate, Enter select/create, Ctrl-T new, Ctrl-D d
              Tab/Shift-Tab switch space (last tab: + new space), Ctrl-A/E/B/F/K/W edit, Esc cancel
              Type space/name to filter or create in another (or a new) space.
              → on a workspace: its worktrees grouped by lane. Enter cd into one, type a name + Enter/Ctrl-T
-             for a new lane (on the highlighted row's lane), Ctrl-D remove that lane, ← back.
+             for a new lane (on the highlighted row's lane), Ctrl-D remove that worktree (its lane too when it
+             was the last one), ← back. A whole lane at once: work rm <workspace>/<lane>.
 `;
 }
 
@@ -173,11 +174,12 @@ function worktreeRows(workspacePath: string): WorktreeRow[] {
     const rec = model.lanes[lane]!;
     const repos = Object.keys(rec.repos).sort();
     // a lane without repos still gets a row, so it can be seen, stacked on and removed
-    if (!repos.length) return [{ folder: "", lane, path: workspacePath, branch: rec.branch, parent: rec.parent }];
+    if (!repos.length) return [{ folder: "", repo: "", lane, path: workspacePath, branch: rec.branch, parent: rec.parent }];
     return repos.map((repo) => {
       const path = worktreePath(workspacePath, lane, repo);
       return {
         folder: basename(path),
+        repo,
         lane,
         path,
         branch: repoBranch(rec, repo),
@@ -292,13 +294,21 @@ async function picker(ctx: Ctx, query: string): Promise<number> {
       visit(ctx, result.workspace, paths[0] ?? result.workspace);
       return 0;
     }
+    case "deleteWorktree": {
+      requireFlatLayout(result.workspace, loadModel(result.workspace));
+      const dir = join(result.workspace, worktreeDir(result.lane, result.repo));
+      removeRepo(ctx.root, result.workspace, result.lane, result.repo);
+      // a lane without worktrees left is gone too; its children stack on its parent
+      const emptied = !Object.keys(loadModel(result.workspace).lanes[result.lane]?.repos ?? {}).length;
+      if (emptied) removeLane(ctx.root, result.workspace, result.lane);
+      info(`Deleted ${relative(ctx.root.path, dir)}${emptied ? ` and lane ${result.lane}` : ""}`);
+      if (isInside(ctx.cwd, dir)) ctx.emit.cd(result.workspace);
+      return 0;
+    }
     case "deleteLane": {
-      const model = loadModel(result.workspace);
-      requireFlatLayout(result.workspace, model);
-      const dirs = Object.keys(model.lanes[result.lane]?.repos ?? {}).map((r) => join(result.workspace, worktreeDir(result.lane, r)));
+      requireFlatLayout(result.workspace, loadModel(result.workspace));
       removeLane(ctx.root, result.workspace, result.lane);
       info(`Deleted lane ${result.lane} of ${relative(ctx.root.path, result.workspace)}`);
-      if (dirs.some((d) => isInside(ctx.cwd, d))) ctx.emit.cd(result.workspace);
       return 0;
     }
   }

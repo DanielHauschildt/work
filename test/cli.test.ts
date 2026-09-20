@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { commit, g, GIT_ENV, makeRemote, type Sandbox, sandbox, sh } from "./helpers.ts";
 
@@ -244,6 +245,25 @@ describe("repos", () => {
     expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).stderr).toContain("no worktree or lane ui in");
   });
 
+  test("add inside a worktree targets that worktree's lane", () => {
+    const app = makeRemote(sb, "app");
+    const docs = makeRemote(sb, "docs");
+    const workspace = work(["new", "--space", "labs", "cwd-lane"]).stdout.trim();
+    work(["add", app], { cwd: workspace });
+    work(["lane", "ui"], { cwd: workspace });
+    // no --lane: the lane comes from the folder we stand in
+    const added = work(["add", docs], { cwd: join(workspace, "app@ui") });
+    expect(added.stdout.trim()).toBe(join(workspace, "docs@ui"));
+    const lanes = JSON.parse(work(["info", "--json"], { cwd: workspace }).stdout).lanes;
+    expect(lanes.find((l: { name: string }) => l.name === "ui").repos.map((r: { folder: string }) => r.folder).sort()).toEqual([
+      "app@ui",
+      "docs@ui",
+    ]);
+    // and from a worktree without a suffix it is lane root
+    const third = work(["add", docs], { cwd: join(workspace, "app") });
+    expect(third.stdout.trim()).toBe(join(workspace, "docs"));
+  });
+
   test("path and info name worktree folders", () => {
     const app = makeRemote(sb, "app");
     const workspace = work(["new", "--space", "labs", "--prefix", "IMG-3", "flat"]).stdout.trim();
@@ -282,6 +302,49 @@ describe("migrate", () => {
     expect(work(["migrate", "--all"]).stderr).toContain("Nothing to migrate.");
     expect(work(["lane", "ui"], { cwd: worktree }).code).toBe(0);
     expect(existsSync(join(ws, "app@ui"))).toBe(true);
+  });
+});
+
+describe("locks and errors", () => {
+  /** The lock file `withLock(stateDir, key)` uses. */
+  function lockFile(key: string): string {
+    return join(sb.root, ".work", "locks", `${createHash("sha1").update(key).digest("hex").slice(0, 16)}.lock`);
+  }
+
+  test("migrate waits for the workspace lock like the other writing commands", () => {
+    const app = makeRemote(sb, "app");
+    const worktree = work(["clone", app, "exp"]).stdout.trim();
+    const ws = join(sb.root, "tries", "exp");
+    mkdirSync(join(ws, "root"));
+    sh(["git", "-C", worktree, "worktree", "move", worktree, join(ws, "root", "app")]);
+
+    // another process (this test) holds the workspace lock
+    const file = lockFile(`workspace:${ws}`);
+    mkdirSync(join(sb.root, ".work", "locks"), { recursive: true });
+    writeFileSync(file, JSON.stringify({ pid: process.pid, t: Date.now(), key: `workspace:${ws}` }));
+    try {
+      const r = work(["migrate", "exp"], { env: { WORK_LOCK_TIMEOUT_MS: "300" } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`timed out waiting for lock on workspace:${ws}`);
+      expect(existsSync(join(ws, "root", "app"))).toBe(true); // nothing moved
+    } finally {
+      rmSync(file, { force: true });
+    }
+    expect(work(["migrate", "exp"]).code).toBe(0);
+    expect(existsSync(join(ws, "app"))).toBe(true);
+  });
+
+  test("a failing git command names the worktree it failed on", () => {
+    const app = makeRemote(sb, "app");
+    const workspace = work(["new", "clash"]).stdout.trim();
+    work(["add", app], { cwd: workspace });
+    // the branch of lane ui is taken by a worktree we add by hand
+    const taken = join(sb.dir, "taken");
+    sh(["git", "-C", join(workspace, "app"), "worktree", "add", "-q", "-b", "clash-ui", taken]);
+    const r = work(["lane", "ui"], { cwd: workspace });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(join(workspace, "app@ui")); // which worktree, not just "git worktree add …"
+    expect(r.stderr).toContain("already checked out");
   });
 });
 
@@ -458,12 +521,26 @@ describe("picker: start tab and lanes", () => {
     expect(plain(keep.stderr)).toContain("Remove cancelled");
     expect(existsSync(join(ws, "app@ui"))).toBe(true);
 
-    const rm = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: join(ws, "app@ui"), wrapper: true });
-    expect(rm.code).toBe(0);
+    // Ctrl-D removes the highlighted worktree; with a second repo in the lane, the lane stays
+    const docs = makeRemote(sb, "docs");
+    work(["add", docs, "--lane", "ui"], { cwd: ws });
+    expect(existsSync(join(ws, "docs@ui"))).toBe(true);
+    const one = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: ws });
+    expect(one.code).toBe(0);
+    expect(one.stderr).toContain("Deleted tries/exp/app@ui");
+    expect(one.stderr).not.toContain("and lane ui");
     expect(existsSync(join(ws, "app@ui"))).toBe(false);
+    expect(existsSync(join(ws, "docs@ui"))).toBe(true);
+    expect(model().lanes.ui).toBeDefined();
+
+    // the lane's last worktree takes the lane with it, and the cwd leaves the removed folder
+    const rm = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}YES\r`], { cwd: join(ws, "docs@ui"), wrapper: true });
+    expect(rm.code).toBe(0);
+    expect(rm.stderr).toContain("Deleted tries/exp/docs@ui and lane ui");
+    expect(existsSync(join(ws, "docs@ui"))).toBe(false);
     expect(model().lanes.ui).toBeUndefined();
     expect(rm.emitted).toBe(`cd '${ws}'\n`);
-    expect(g(join(ws, "app"), "worktree", "list")).not.toContain("app@ui");
+    expect(g(join(ws, "app"), "worktree", "list")).not.toContain("@ui");
   });
 
   test("creating a lane that fails reports the error like other commands", () => {

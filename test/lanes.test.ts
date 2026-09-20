@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { addRepo, createLane, removeLane, removeRepo } from "../src/lanes.ts";
+import { addRepo, createLane, legacyLanes, removeLane, removeRepo, requireFlatLayout } from "../src/lanes.ts";
 import { loadModel } from "../src/model.ts";
 import { Root } from "../src/root.ts";
-import { commit, g, makeRemote, type Sandbox, sandbox } from "./helpers.ts";
+import { commit, g, makeRemote, type Sandbox, sandbox, sh } from "./helpers.ts";
 
 let sb: Sandbox;
 let root: Root;
@@ -86,7 +86,7 @@ describe("lanes", () => {
     const top = readFileSync(join(workspace, "AGENTS.md"), "utf8");
     expect(top).toContain("| `root` | `IMG-1234-autofit` | trunk | `app/` |");
     expect(top).toContain("| `ui` | `IMG-1234-autofit-ui` | root | `app@ui/` |");
-    expect(top).toContain("Work only in your own lane's folders");
+    expect(top).toContain("Your folders are the ones whose suffix is your lane (`@ui` for lane `ui`)");
     expect(readFileSync(join(workspace, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
     // a generated file inside a worktree would be untracked in the user's repo
     expect(existsSync(join(workspace, "app@ui", "AGENTS.md"))).toBe(false);
@@ -126,6 +126,40 @@ describe("lanes", () => {
     expect(existsSync(join(workspace, "docs"))).toBe(false);
     expect(existsSync(join(workspace, "app"))).toBe(true);
     expect(Object.keys(loadModel(workspace).lanes.root!.repos)).toEqual(["app"]);
+  });
+
+  test("a repo named like a lane never looks like the old layout", () => {
+    // worktree <ws>/ui in lane root, with a subfolder named like the repo of lane ui
+    const uiRepo = makeRemote(sb, "ui");
+    addRepo(root, workspace, { lane: "root", spec: uiRepo, cwd: sb.dir });
+    addRepo(root, workspace, { lane: "ui", spec: app, cwd: sb.dir, parent: "root" });
+    mkdirSync(join(workspace, "ui", "app"), { recursive: true });
+
+    expect(legacyLanes(workspace, loadModel(workspace))).toEqual([]);
+    expect(() => requireFlatLayout(workspace, loadModel(workspace))).not.toThrow();
+    // and a real old-layout folder is still detected: lane root's own worktree back under <ws>/root/
+    mkdirSync(join(workspace, "root"), { recursive: true });
+    sh(["git", "-C", join(workspace, "ui"), "worktree", "move", join(workspace, "ui"), join(workspace, "root", "ui")]);
+    expect(legacyLanes(workspace, loadModel(workspace))).toEqual(["root"]);
+    expect(() => requireFlatLayout(workspace, loadModel(workspace))).toThrow(/still uses lane folders \(root\)/);
+  });
+
+  test("a lane whose worktrees all fail is rolled back; a partial one says how to go on", () => {
+    addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
+    addRepo(root, workspace, { lane: "root", spec: docs, cwd: sb.dir });
+    // the branch of the lane-to-be is already checked out elsewhere, so every addRepo fails
+    addRepo(root, workspace, { lane: "blocked", spec: app, cwd: sb.dir, parent: "root", branch: "IMG-1234-autofit-ui" });
+    expect(() => createLane(root, workspace, { name: "ui", parent: "root", repos: [], cwd: sb.dir })).toThrow(/already checked out/);
+    expect(loadModel(workspace).lanes.ui).toBeUndefined(); // nothing created → no lane record
+    expect(existsSync(join(workspace, "app@ui"))).toBe(false);
+
+    // now only the second repo fails: the lane keeps the first worktree
+    addRepo(root, workspace, { lane: "half", spec: docs, cwd: sb.dir, parent: "root", branch: "IMG-1234-autofit-mixed" });
+    expect(() => createLane(root, workspace, { name: "mixed", parent: "root", repos: [], cwd: sb.dir })).toThrow(
+      /Lane mixed has 1 of 2 worktrees: add the rest with `work add <repo> --lane mixed`, or drop the lane with `work rm \.\/mixed`/,
+    );
+    expect(Object.keys(loadModel(workspace).lanes.mixed!.repos)).toEqual(["app"]);
+    expect(existsSync(join(workspace, "app@mixed"))).toBe(true);
   });
 
   test("same branch twice is rejected with a hint", () => {

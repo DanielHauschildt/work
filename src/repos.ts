@@ -193,8 +193,8 @@ export function addWorktree(
     if (r.code !== 0) {
       const msg = r.stderr.trim();
       if (/already (checked out|used by worktree)/.test(msg))
-        fail(`branch '${branch}' is already checked out in another worktree:\n${msg}\nPick another lane or pass a branch.`);
-      throw new WorkError(`git worktree add failed: ${msg}`);
+        fail(`cannot create ${path}: branch '${branch}' is already checked out in another worktree:\n${msg}\nPick another lane or pass a branch.`);
+      throw new WorkError(`git worktree add ${path} failed: ${msg}`);
     }
     const baseSha = revParse(src.path, baseRef) ?? baseRef;
     const base = local || remote ? (gitTry(src.path, ["merge-base", branch, baseSha]) ?? baseSha) : baseSha;

@@ -20,6 +20,22 @@ function ensureClaudeMd(dir: string): void {
   if (!existsSync(file)) writeFileSync(file, "@AGENTS.md\n");
 }
 
+/**
+ * True when the file holds nothing but what `work` generated: an AGENTS.md that is only the block, or a
+ * CLAUDE.md that only imports it. Anything else is the user's and must not be deleted.
+ */
+export function isGeneratedOnly(file: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  if (basename(file) === "CLAUDE.md") return text.trim() === "@AGENTS.md";
+  const m = BLOCK.exec(text);
+  return m !== null && text.replace(BLOCK, "").trim() === "";
+}
+
 export function workspaceAgentsBody(workspaceName: string, space: string, model: WorkspaceModel): string {
   const lanes = topoLanes(model);
   const rows = lanes.map((name) => {
@@ -28,9 +44,6 @@ export function workspaceAgentsBody(workspaceName: string, space: string, model:
     const folders = repos.map((r) => `\`${worktreeDir(name, r)}/\`${repoBranch(l, r) === l.branch ? "" : ` (${repoBranch(l, r)})`}`);
     return `| \`${name}\` | \`${l.branch}\` | ${l.parent ?? "trunk"} | ${folders.join(", ") || "–"} |`;
   });
-  // prefer a stacked lane's folder: it shows the @suffix the rule is about
-  const folders = lanes.flatMap((name) => Object.keys(model.lanes[name]!.repos).map((r) => worktreeDir(name, r)));
-  const example = folders.find((f) => f.includes("@")) ?? folders[0];
   return [
     `# Workspace \`${workspaceName}\` (space \`${space}\`)`,
     "",
@@ -43,7 +56,8 @@ export function workspaceAgentsBody(workspaceName: string, space: string, model:
     ...rows,
     "",
     "Rules for agents:",
-    `- Work only in your own lane's folders${example ? ` (\`${example}\`, …)` : ""}; the other folders belong to other agents.`,
+    "- Your folders are the ones whose suffix is your lane (`@ui` for lane `ui`); folders without a suffix belong",
+    "  to lane `root`. See the table above; the other folders belong to other agents.",
     "- Commit on the lane's branch; never switch branches inside a worktree.",
     "- `work info --json` shows lanes, branches and status; `work sync` restacks lanes onto their parents;",
     "  `work submit` pushes and opens/updates one PR per repo and lane.",

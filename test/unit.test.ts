@@ -10,11 +10,13 @@ import {
   cloneDirName,
   isGitUri,
   laneBranch,
+  laneOfFolder,
   parseGitUri,
   prefixText,
   sanitizeRef,
   stripDate,
   versionedBase,
+  worktreeDir,
 } from "../src/naming.ts";
 import { Root } from "../src/root.ts";
 import { type Sandbox, sandbox, sh } from "./helpers.ts";
@@ -44,6 +46,24 @@ describe("naming", () => {
     expect(laneBranch("IMG-1234-autofit", "ui")).toBe("IMG-1234-autofit-ui");
     expect(stripDate("2026-09-19-x")).toBe("x");
     expect(sanitizeRef("a b~c^d:e?f*g[h\\i..j.lock")).toBe("a-b-c-d-e-f-g-h-i.j");
+  });
+
+  test("worktree folders carry the lane after an @", () => {
+    expect(worktreeDir("root", "cesdk-web")).toBe("cesdk-web");
+    expect(worktreeDir("ui", "cesdk-web")).toBe("cesdk-web@ui");
+    expect(worktreeDir("ui", "a@b")).toBe("a@b@ui"); // repo names with @ are refused when adding
+    for (const [folder, lane] of [
+      ["cesdk-web", "root"],
+      ["cesdk-web@ui", "ui"],
+      ["a@b@ui", "ui"], // the last @ wins
+      ["@ui", "root"], // no repo part: not a suffix
+      ["cesdk-web@", "root"], // empty lane: not a suffix
+      ["", "root"],
+    ] as const) {
+      expect(laneOfFolder(folder)).toBe(lane);
+    }
+    // every folder maps back to its lane
+    for (const lane of ["root", "ui", "guide-2", "x.y"]) expect(laneOfFolder(worktreeDir(lane, "repo"))).toBe(lane);
   });
 
   test("try URL detection and parsing", () => {

@@ -53,10 +53,10 @@ export function worktreeDir(lane: string, repo: string): string {
   return lane === ROOT_LANE ? repo : `${repo}@${lane}`;
 }
 
-/** Lane a worktree folder belongs to: the part after its `@`, else lane `root`. */
+/** Lane a worktree folder belongs to: the part after its `@`, else lane `root` (an empty part is no suffix). */
 export function laneOfFolder(folder: string): string {
   const at = folder.lastIndexOf("@");
-  return at > 0 ? folder.slice(at + 1) : ROOT_LANE;
+  return (at > 0 ? folder.slice(at + 1) : "") || ROOT_LANE;
 }
 
 /** Branch for a lane: workspace name without date; lanes other than root append `-<lane>`. */
