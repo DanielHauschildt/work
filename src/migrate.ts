@@ -2,10 +2,9 @@ import { existsSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeAgentFiles } from "./agents.ts";
 import { fail } from "./errors.ts";
-import { commonDirOf, isLinkedWorktree, run, worktreeStatus } from "./git.ts";
-import { legacyLanes } from "./lanes.ts";
+import { commonDirOf, isLinkedWorktree, isRepoDir, run, worktreeStatus } from "./git.ts";
 import { withLock } from "./lock.ts";
-import { loadModel, saveModel, type WorkspaceModel } from "./model.ts";
+import { loadModel, saveModel } from "./model.ts";
 import { worktreeDir } from "./naming.ts";
 import { commonKey } from "./repos.ts";
 import type { Root } from "./root.ts";
@@ -32,7 +31,11 @@ const GENERATED = ["AGENTS.md", "CLAUDE.md"];
  */
 export function migrateWorkspace(root: Root, workspacePath: string, opts: { force?: boolean } = {}): MigrationReport {
   const model = loadModel(workspacePath);
-  const lanes = legacyLanes(workspacePath, model);
+  // every lane that still has a folder: it either holds worktrees to move, or is an emptied leftover
+  const lanes = Object.keys(model.lanes).filter((lane) => {
+    const dir = join(workspacePath, lane);
+    return existsSync(dir) && !isRepoDir(dir); // a repo named like a lane is a worktree, not a lane folder
+  });
   const report: MigrationReport = { workspace: workspacePath, moved: [], keptFolders: [] };
   if (!lanes.length) return report;
 
@@ -44,8 +47,9 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
       const to = join(workspacePath, worktreeDir(lane, repo));
       if (existsSync(to)) fail(`${to} already exists`);
       if (!opts.force) {
+        // moving keeps every commit, so only work that isn't committed yet is a reason to stop
         const st = worktreeStatus(from);
-        if (st.dirty || st.unpushed > 0 || st.rebasing) fail(`${from} has uncommitted or unpushed work (use --force)`);
+        if (st.dirty || st.rebasing) fail(`${from} has ${st.rebasing ? "a rebase in progress" : "uncommitted changes"} (use --force)`);
       }
       moves.push({ from, to, plain: !isLinkedWorktree(from) });
     }
@@ -74,6 +78,3 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
   return report;
 }
 
-export function needsMigration(workspacePath: string, model: WorkspaceModel): boolean {
-  return legacyLanes(workspacePath, model).length > 0;
-}

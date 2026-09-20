@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { commit, g, GIT_ENV, makeRemote, type Sandbox, sandbox } from "./helpers.ts";
+import { commit, g, GIT_ENV, makeRemote, type Sandbox, sandbox, sh } from "./helpers.ts";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 const TODAY = "2026-09-19";
@@ -239,6 +239,33 @@ describe("repos", () => {
     const info = work(["info", "flat"]).stdout;
     expect(info).toContain("  ui  IMG-3-flat-ui  on root");
     expect(info).toContain("    app@ui/  IMG-3-flat-ui");
+  });
+});
+
+describe("migrate", () => {
+  test("old lane folders are refused, migrate moves them and the cwd follows", () => {
+    const app = makeRemote(sb, "app");
+    const worktree = work(["clone", app, "exp"]).stdout.trim();
+    const ws = join(sb.root, "tries", "exp");
+    // put the worktree back into the layout work used before: <workspace>/<lane>/<repo>
+    const old = join(ws, "root", "app");
+    mkdirSync(join(ws, "root"));
+    sh(["git", "-C", worktree, "worktree", "move", worktree, old]);
+
+    const refused = work(["add", app], { cwd: old });
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("still uses lane folders (root) — run `work migrate` first");
+
+    const migrated = work(["migrate"], { cwd: old, wrapper: true });
+    expect(migrated.code).toBe(0);
+    expect(migrated.stderr).toContain("tries/exp: app");
+    expect(migrated.emitted).toBe(`cd '${worktree}'\n`); // the cwd follows into the moved worktree
+    expect(existsSync(join(ws, "root"))).toBe(false);
+    expect(g(worktree, "branch", "--show-current")).toBe("exp");
+
+    expect(work(["migrate", "--all"]).stderr).toContain("Nothing to migrate.");
+    expect(work(["lane", "ui"], { cwd: worktree }).code).toBe(0);
+    expect(existsSync(join(ws, "app@ui"))).toBe(true);
   });
 });
 

@@ -117,9 +117,11 @@ export function worktreePath(workspacePath: string, lane: string, repo: string):
   return existsSync(legacy) ? legacy : flat;
 }
 
-/** Lanes of `model` that still have a `<lane>/` folder (layout before worktrees became `<repo>@<lane>`). */
+/** Lanes whose worktrees still sit in a `<lane>/<repo>` folder (the layout before `<repo>@<lane>`). */
 export function legacyLanes(workspacePath: string, model: WorkspaceModel): string[] {
-  return Object.keys(model.lanes).filter((lane) => existsSync(join(workspacePath, lane)));
+  return Object.keys(model.lanes).filter((lane) =>
+    Object.keys(model.lanes[lane]!.repos).some((repo) => existsSync(join(workspacePath, lane, repo))),
+  );
 }
 
 /** Refuse to touch a workspace that `work migrate` hasn't converted yet. */

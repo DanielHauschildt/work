@@ -48,17 +48,20 @@ expect "\$ "
 send "work - && pwd\r"
 expect -re "/labs/IMG-1-autofit" { send_user "OK work - returned to previous workspace\n" } timeout { send_user "FAIL back\n" }
 expect "\$ "
-# 5b. lanes: add lane ui (no repos), go back to the workspace, → in the picker (workspace preselected), Enter
-send "work lane ui && cd ..\r"
+# 5b. lanes: add a repo, stack lane ui on it, back to the workspace, → in the picker (workspace preselected),
+#     down to the ui row, Enter
+send "work add $env(S)/seed-app >/dev/null && work lane ui >/dev/null && cd ..\r"
 expect "\$ "
 send "work\r"
 expect -ex {[labs]}
 send "\x1b\[C"
 expect "Enter cd"
+send "\x1b\[B"
+after 200
 send "\r"
 expect "\$ "
 send "pwd\r"
-expect -re "/labs/IMG-1-autofit/ui" { send_user "OK right arrow opened the preselected workspace's lanes, Enter cd'd into lane ui\n" } timeout { send_user "FAIL lanes\n" }
+expect -re "/labs/IMG-1-autofit/seed-app@ui" { send_user "OK right arrow listed the worktrees, Enter cd'd into seed-app@ui\n" } timeout { send_user "FAIL worktrees\n" }
 expect "\$ "
 # 6. + new tab (from outside the root, so the picker starts in all): Tab past all/labs/tries, type a space name,
 #    Enter, Enter (date default), Esc

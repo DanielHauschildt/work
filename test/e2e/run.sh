@@ -26,8 +26,13 @@ EOF
 
 status=0
 for driver in drive.exp drive-bash.exp; do
-  rm -rf "$S/Work"
+  rm -rf "$S/Work" "$S/seed-app"
   mkdir -p "$S/Work/tries/2026-09-01-redis-server" "$S/Work/tries/2026-09-02-kafka" "$S/Work/labs/IMG-1-autofit"
+  # a local repo for the lane step; fresh per run, since its worktrees go with $S/Work
+  git init -q "$S/seed-app"
+  : >"$S/seed-app/README.md"
+  git -C "$S/seed-app" add README.md
+  git -C "$S/seed-app" -c user.email=e2e@example.com -c user.name=e2e commit -q -m init
   echo "== $driver"
   expect "$REPO/test/e2e/$driver" | tee "$S/out.txt"
   want=$(grep -c 'send_user "OK' "$REPO/test/e2e/$driver")

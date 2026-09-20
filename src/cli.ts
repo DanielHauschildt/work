@@ -606,7 +606,7 @@ function cmdUnarchive(ctx: Ctx, args: string[]): number {
 
 function cmdRm(ctx: Ctx, args: string[]): number {
   const target = args[0];
-  if (!target) fail("usage: work rm <workspace>[/<lane>[/<repo>]] | ./<lane>[/<repo>] [--yes] [--force]");
+  if (!target) fail("usage: work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]");
   const parts = target.split("/").filter(Boolean);
   let workspace: WorkspaceInfo;
   let rest: string[];
