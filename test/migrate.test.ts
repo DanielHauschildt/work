@@ -84,19 +84,27 @@ describe("migrate", () => {
     expect(readFileSync(join(workspace, "docs", "wip.txt"), "utf8")).toBe("wip");
   });
 
-  test("a lane folder with other files is kept, --force deletes it", () => {
+  test("a lane folder with other files is kept; --force moves them out instead of deleting them", () => {
     addRepo(root, workspace, { lane: "root", spec: app, cwd: sb.dir });
     toOldLayout("root", "app");
     writeFileSync(join(workspace, "root", "notes.md"), "mine\n");
+    mkdirSync(join(workspace, "root", "scratch"));
+    writeFileSync(join(workspace, "root", "scratch", "x.txt"), "deep\n");
+    writeFileSync(join(workspace, "root-notes.md"), "older\n"); // name already taken
 
     const report = migrateWorkspace(root, workspace);
     expect(report.keptFolders).toEqual([join(workspace, "root")]);
+    expect(report.rescued).toEqual([]);
     expect(readFileSync(join(workspace, "root", "notes.md"), "utf8")).toBe("mine\n");
     expect(existsSync(join(workspace, "root", "AGENTS.md"))).toBe(true); // only removed with the folder
     expect(existsSync(join(workspace, "app"))).toBe(true);
 
-    migrateWorkspace(root, workspace, { force: true });
+    const forced = migrateWorkspace(root, workspace, { force: true });
+    expect(forced.rescued.sort()).toEqual([join(workspace, "root-notes.md-2"), join(workspace, "root-scratch")]);
     expect(existsSync(join(workspace, "root"))).toBe(false);
+    expect(readFileSync(join(workspace, "root-notes.md-2"), "utf8")).toBe("mine\n");
+    expect(readFileSync(join(workspace, "root-notes.md"), "utf8")).toBe("older\n"); // untouched
+    expect(readFileSync(join(workspace, "root-scratch", "x.txt"), "utf8")).toBe("deep\n");
   });
 
   test("a repo folder named like a lane is left alone", () => {

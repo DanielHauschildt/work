@@ -127,7 +127,8 @@ export function legacyLanes(workspacePath: string, model: WorkspaceModel): strin
 /** Refuse to touch a workspace that `work migrate` hasn't converted yet. */
 export function requireFlatLayout(workspacePath: string, model: WorkspaceModel): void {
   const old = legacyLanes(workspacePath, model);
-  if (old.length) fail(`${workspacePath} still uses lane folders (${old.join(", ")}) — run \`work migrate\` first`);
+  if (!old.length) return;
+  fail(`${workspacePath} still uses lane folders (${old.join(", ")}): run \`work migrate\` for this workspace, or \`work migrate --all\` for every workspace`);
 }
 
 export interface RemovalCheck {

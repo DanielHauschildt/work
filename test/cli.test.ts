@@ -228,6 +228,22 @@ describe("repos", () => {
     ]);
   });
 
+  test("rm: a worktree folder wins over a lane of the same name", () => {
+    const ui = makeRemote(sb, "ui");
+    const workspace = work(["new", "clash"]).stdout.trim();
+    work(["add", ui], { cwd: workspace }); // folder <ws>/ui in lane root
+    work(["lane", "ui"], { cwd: workspace }); // lane ui → folder <ws>/ui@ui
+    expect(existsSync(join(workspace, "ui@ui"))).toBe(true);
+
+    expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).code).toBe(0);
+    expect(existsSync(join(workspace, "ui"))).toBe(false); // the worktree went
+    expect(existsSync(join(workspace, "ui@ui"))).toBe(true); // the lane stayed
+    // with the folder gone, the same name means the lane
+    expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).code).toBe(0);
+    expect(existsSync(join(workspace, "ui@ui"))).toBe(false);
+    expect(work(["rm", "./ui", "--yes"], { cwd: workspace }).stderr).toContain("no worktree or lane ui in");
+  });
+
   test("path and info name worktree folders", () => {
     const app = makeRemote(sb, "app");
     const workspace = work(["new", "--space", "labs", "--prefix", "IMG-3", "flat"]).stdout.trim();
@@ -254,7 +270,7 @@ describe("migrate", () => {
 
     const refused = work(["add", app], { cwd: old });
     expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("still uses lane folders (root) — run `work migrate` first");
+    expect(refused.stderr).toContain("still uses lane folders (root): run `work migrate` for this workspace, or `work migrate --all` for every workspace");
 
     const migrated = work(["migrate"], { cwd: old, wrapper: true });
     expect(migrated.code).toBe(0);

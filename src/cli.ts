@@ -89,7 +89,9 @@ Usage:
   work migrate [workspace | --all] [--force]       Convert <lane>/<repo> folders to <repo>@<lane>
   work mv [workspace] <space>[/<name>] [--prefix P]
   work archive [workspace] | work unarchive <workspace>
-  work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]
+  work rm <workspace>[/<folder>|/<lane>[/<repo>]] | ./<folder> | ./<lane> [--yes] [--force]
+                                   folder (e.g. docs@ui) = one worktree, lane = all of its worktrees;
+                                   a folder of that name wins over a lane of that name
   work sync [--continue|--abort]   Restack lanes onto their parents
   work submit [--draft]            Push lanes, open/update stacked PRs (gh)
   work init [path] [--shortcut NAME[=SPACE]]…
@@ -606,7 +608,7 @@ function cmdUnarchive(ctx: Ctx, args: string[]): number {
 
 function cmdRm(ctx: Ctx, args: string[]): number {
   const target = args[0];
-  if (!target) fail("usage: work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]");
+  if (!target) fail("usage: work rm <workspace>[/<folder>|/<lane>[/<repo>]] | ./<folder> | ./<lane> [--yes] [--force]");
   const parts = target.split("/").filter(Boolean);
   let workspace: WorkspaceInfo;
   let rest: string[];
@@ -658,8 +660,11 @@ function removalTarget(
   };
   if (rest.length === 2) return one(rest[0]!, rest[1]!);
   const target = rest[0]!;
-  // a lane name (no "@") removes the whole lane; a folder name removes that one worktree
-  if (!target.includes("@") && model.lanes[target]) {
+  // a worktree folder wins over a lane of the same name; the lane is then `<lane>/<repo>` or another folder
+  const lane = laneOfFolder(target);
+  const repo = lane === DEFAULT_LANE ? target : target.slice(0, -(lane.length + 1));
+  if (model.lanes[lane]?.repos[repo]) return one(lane, repo);
+  if (model.lanes[target]) {
     requireFlatLayout(workspace.path, model);
     const repos = Object.keys(model.lanes[target]!.repos).sort();
     return {
@@ -668,10 +673,7 @@ function removalTarget(
       label: `${name} lane ${target}`,
     };
   }
-  const lane = laneOfFolder(target);
-  const repo = lane === DEFAULT_LANE ? target : target.slice(0, -(lane.length + 1));
-  if (!model.lanes[lane]?.repos[repo]) fail(`no lane or worktree ${target} in ${name}`);
-  return one(lane, repo);
+  fail(`no worktree or lane ${target} in ${name}`);
 }
 
 /** Convert old `<lane>/<repo>` folders to `<repo>[@<lane>]`; follows the cwd into the moved worktree. */
@@ -691,7 +693,8 @@ function cmdMigrate(ctx: Ctx, args: string[]): number {
   }
   for (const r of reports) {
     if (r.moved.length) info(`${relative(ctx.root.path, r.workspace)}: ${r.moved.map((m) => basename(m)).join(", ")}`);
-    for (const dir of r.keptFolders) info(`kept ${dir} (not empty; --force deletes it)`);
+    for (const dir of r.keptFolders) info(`kept ${dir} (other files in it; --force moves them next to the worktrees)`);
+    for (const path of r.rescued) info(`moved ${relative(ctx.root.path, path)} out of its lane folder`);
   }
   if (!reports.some((r) => r.moved.length)) info("Nothing to migrate.");
   return 0;

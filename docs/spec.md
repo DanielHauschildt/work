@@ -55,9 +55,11 @@ Hidden folders (`.repos`, `.work`, `.archive`) are never spaces/workspaces.
   legacy repo is renamed), deletes the emptied lane folders, rewrites `.work.json` and `AGENTS.md`, and follows the
   cwd into the moved worktree. Everything is checked first: one worktree with uncommitted changes or a rebase in
   progress refuses the whole workspace and moves nothing (`--force` skips the check), and a lane folder that still
-  holds other files is kept (`--force` deletes it). Until a workspace is converted, `info`, the picker rows, `rm`
-  of one worktree and `path <query> <lane>` still find the old folder, while `add`, `lane`, `rm` of a lane, `sync`
-  and `submit` refuse it with "run `work migrate` first".
+  holds other files is kept (`--force` moves them to the workspace as `<lane>-<name>` — user files are never
+  deleted — and drops the folder with the generated `AGENTS.md`/`CLAUDE.md`). Until a workspace is converted,
+  `info`, the picker rows, `rm` of one worktree and `path <query> <lane>` still find the old folder, while `add`,
+  `lane`, `rm` of a lane, `sync` and `submit` refuse it and name the command: `work migrate` for this workspace,
+  `work migrate --all` for every workspace.
 
 ## Shell integration
 
@@ -98,7 +100,9 @@ work lane <name> [repos...] [--on PARENT]      stacked lane: one worktree <repo>
 work migrate [workspace | --all] [--force]     convert <lane>/<repo> folders to <repo>[@<lane>]
 work mv <workspace> <space>[/<name>] [--prefix P]  move/rename/promote; repairs worktrees; cd follows if inside
 work archive [workspace] | unarchive <workspace>
-work rm <workspace>[/<lane>[/<repo>]] | ./<lane> | ./<repo>@<lane> [--yes] [--force]
+work rm <workspace>[/<folder>|/<lane>[/<repo>]] | ./<folder> | ./<lane> [--yes] [--force]
+                                 folder (`docs@ui`, `docs`) = that worktree, lane = all of its worktrees;
+                                 an existing folder of that name wins over a lane of that name
                                  a lane removes all its worktrees, a folder just that one
 work sync [--continue | --abort]  restack lanes (phase 3)
 work submit [--draft]             push + PRs per lane worktree (phase 3)

@@ -54,7 +54,7 @@ work submit --draft           # push lanes, open one PR per repo+lane with base 
 work mv labs --prefix IMG-99  # promote the current workspace from tries to labs, worktrees repaired
 work archive / unarchive      # <space>/.archive/<workspace>
 work rm ./ui --yes            # remove a lane = all its worktrees (refuses dirty/unpushed without --force)
-work rm ./cesdk-web@ui --yes  # remove a single worktree
+work rm ./cesdk-web@ui --yes  # remove a single worktree (a folder of that name wins over a lane of that name)
 work migrate                  # old <lane>/<repo> folders → <repo>[@<lane>] (--all for every workspace)
 work info --json | work ls --json | work path <query> [folder]
 ```

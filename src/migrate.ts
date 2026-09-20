@@ -6,8 +6,17 @@ import { commonDirOf, isLinkedWorktree, isRepoDir, run, worktreeStatus } from ".
 import { withLock } from "./lock.ts";
 import { loadModel, saveModel } from "./model.ts";
 import { worktreeDir } from "./naming.ts";
-import { commonKey } from "./repos.ts";
+import { commonKey, repairWorktree } from "./repos.ts";
 import type { Root } from "./root.ts";
+
+/** Move `from` to `<workspace>/<name>`, avoiding collisions (`name-2`, `name-3`, …). Returns the new path. */
+function rescue(from: string, workspacePath: string, name: string): string {
+  let to = join(workspacePath, name);
+  for (let n = 2; existsSync(to); n++) to = join(workspacePath, `${name}-${n}`);
+  renameSync(from, to);
+  if (isLinkedWorktree(to)) repairWorktree(to);
+  return to;
+}
 
 interface Move {
   from: string;
@@ -20,6 +29,8 @@ export interface MigrationReport {
   workspace: string;
   moved: string[];
   keptFolders: string[];
+  /** files rescued out of a lane folder by --force, as `<lane>-<name>` in the workspace */
+  rescued: string[];
 }
 
 /** Files `work` generated inside a lane folder; they are recreated at workspace level. */
@@ -36,7 +47,7 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
     const dir = join(workspacePath, lane);
     return existsSync(dir) && !isRepoDir(dir); // a repo named like a lane is a worktree, not a lane folder
   });
-  const report: MigrationReport = { workspace: workspacePath, moved: [], keptFolders: [] };
+  const report: MigrationReport = { workspace: workspacePath, moved: [], keptFolders: [], rescued: [] };
   if (!lanes.length) return report;
 
   const moves: Move[] = [];
@@ -70,6 +81,8 @@ export function migrateWorkspace(root: Root, workspacePath: string, opts: { forc
       report.keptFolders.push(dir);
       continue;
     }
+    // --force never deletes your files: they move next to the worktrees as `<lane>-<name>`
+    for (const name of left) report.rescued.push(rescue(join(dir, name), workspacePath, `${lane}-${name}`));
     rmSync(dir, { recursive: true, force: true });
   }
 

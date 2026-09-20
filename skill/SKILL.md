@@ -31,7 +31,7 @@ description: Use when working inside a `work` workspace (a folder under ~/Work/<
 | Restack after a parent changed | `work sync` (conflict: fix in the printed worktree, `git add`, `work sync --continue`; or `--abort`) |
 | Push + open/update stacked PRs | `work submit [--draft]` (one PR per repo and lane, base = parent lane branch) |
 | Move / promote | `work mv <workspace> labs[/<name>] [--prefix P]` |
-| Remove a finished lane | `work rm ./<lane> --yes` (all its worktrees) or `work rm ./<repo>@<lane> --yes` (one); branches are kept |
+| Remove a finished lane | `work rm ./<lane> --yes` (all its worktrees) or `work rm ./<repo>@<lane> --yes` (one; a folder of that name wins over a lane of that name); branches are kept |
 | Workspace still has `<lane>/<repo>` folders | `work migrate [--force]` — writing commands refuse it until then |
 
 A lane without explicit repos inherits the repos of its parent lane (with no repos it gets no folder). The current
