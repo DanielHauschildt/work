@@ -137,12 +137,14 @@ asynchronously and redrawn, `stale` when older than the space's `cleanup_days`);
 
 Worktree view (try ignores ←/→, so try parity holds): → on a workspace with lanes shows its worktrees grouped by
 lane (parents first) under a breadcrumb `📁 work › space › workspace`: folder name (`cesdk-web@ui`), branch,
-`on <parent|main>`, async `*` dirty; a lane without worktrees gets one row with its lane name and `no worktrees`;
+`on <parent|trunk>`, async `*` dirty; a lane without worktrees gets one row with its lane name and `no worktrees`;
 typing filters by folder name. Enter cds into the worktree (history records the workspace). A valid new name
 (`^[A-Za-z0-9][A-Za-z0-9._-]*$`, whitespace → `-`) adds `📂 New lane on <lane>: <name>` on the lane of the last
 highlighted row; Enter / Ctrl-T returns it and the CLI runs `createLane` (inherits the parent's repos) after the
-picker closed, then cds into the first new worktree. Ctrl-D on a row: YES screen listing that lane's folders with
-`removalWarnings`, then the CLI runs `removeLane` for the whole lane. ← returns to the list with the query
+picker closed, then cds into the first new worktree. Ctrl-D on a row: YES screen for that one worktree with
+`removalWarnings` (plus "last worktree of lane X — the lane goes with it" when it is), then the CLI runs
+`removeRepo`, followed by `removeLane` when the lane has no worktrees left; on a row without worktrees it removes
+the lane record. A whole lane at once is `work rm <workspace>/<lane>`. ← returns to the list with the query
 restored and the cursor on the workspace; Esc cancels the picker. → on a workspace without lanes shows
 `no lanes — work add <repo>`.
 
@@ -190,7 +192,8 @@ The workspace gets `AGENTS.md` (generated block between `<!-- work:begin -->`/`<
 and `CLAUDE.md` containing `@AGENTS.md` (created only if missing) — at workspace level only, because a generated
 file inside a worktree would show up as untracked in the user's repo. The block holds a table
 `| Lane | Branch | Stacked on | Folders |` (folders `<repo>/` or `<repo>@<lane>/`, a repo on its own branch with
-that branch in parentheses) and the rules: work only in your own lane's folders, the others belong to other agents;
+that branch in parentheses) and the rules: work only in folders whose suffix is your lane (none = lane `root`),
+the others belong to other agents;
 commit on the lane's branch and never switch branches inside a worktree; `work info --json` for lanes, branches
 and status; `work sync` / `work submit`; `work lane <name> [repos…] --on <lane>` for a new stacked feature.
 A Claude Code skill lives in `skill/SKILL.md`.

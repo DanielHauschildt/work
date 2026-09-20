@@ -97,13 +97,15 @@ Search: ▌
   📁 cesdk-web@ui  IMG-1234-autofit-ui     on root  *
   📁 docs@guide    IMG-1234-autofit-guide  on root
 ──────────────────────────────────────────────────────────
-↑↓ Enter cd  ← Back  ^T New lane  ^D Remove  Esc
+↑↓ Enter cd  ← Back  ^T New lane  ^D Remove worktree  Esc
 ```
 
 Enter cds into the worktree. Type a name to get `📂 New lane on <lane>: <name>` — the new lane stacks on the lane of
 the row you highlighted last and gets its repos (like `work lane`); Enter or Ctrl-T creates it. Ctrl-D removes the
-whole lane of the highlighted row after `YES` (dirty or unpushed worktrees are listed first). `*` marks worktrees
-with uncommitted changes; a lane without worktrees is one row showing its name, its branch and `no worktrees`.
+highlighted worktree after `YES` (dirty or unpushed work is listed first) — and its lane with it when it was the
+lane's last worktree, which the screen says. A whole lane at once: `work rm <workspace>/<lane>`. `*` marks
+worktrees with uncommitted changes; a lane without worktrees is one row showing its name, its branch and
+`no worktrees` (Ctrl-D then removes the lane record).
 
 Spaces from the command line: `work space` (list), `work space new clients --prefix none`,
 `work space set labs --prefix IMG`.
@@ -121,7 +123,8 @@ cleanup_days = 30          # mark workspaces not visited for 30 days as stale (p
 
 Every workspace gets an `AGENTS.md` (generated block, your own text is kept) and a `CLAUDE.md` that imports it —
 at workspace level only, so nothing generated shows up as an untracked file inside one of your repos. The table
-lists lane, branch, stacked-on and folders, and the rules tell each agent to work only in its own lane's folders.
+lists lane, branch, stacked-on and folders, and the rules tell each agent to work only in folders whose suffix is
+its lane.
 `skill/SKILL.md` is a Claude Code skill for the CLI (copy to `~/.claude/skills/work/`).
 All non-picker commands work without a TTY, take `--json`, and use `--yes` instead of typed confirmation.
 

@@ -14,7 +14,7 @@ description: Use when working inside a `work` workspace (a folder under ~/Work/<
 
 ## Rules
 
-- Work only in your lane's folders, e.g. `cesdk-web@ui`; the others belong to other agents. Read the workspace's `AGENTS.md` first.
+- Work only in folders whose suffix is your lane (`@ui` for lane `ui`; no suffix = lane `root`); the others belong to other agents. Read the workspace's `AGENTS.md` first.
 - Commit on the lane branch. Never `git checkout`/`switch` other branches inside a worktree.
 - Call the binary directly: it never needs a TTY for these commands and prints paths on stdout.
   Destructive commands need `--yes`; they refuse dirty/unpushed work unless `--force`.
