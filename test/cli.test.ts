@@ -450,7 +450,7 @@ describe("picker: start tab and lanes", () => {
     const view = work(["--and-keys", RIGHT], { cwd: ws });
     const lines = plain(view.stderr).split("\n");
     expect(lines).toContain("📁 work › tries › exp");
-    expect(lines).toContain("→ 📁 app     exp     on main");
+    expect(lines).toContain("→ 📁 app     exp     on trunk");
     expect(lines).toContain("  📁 app@ui  exp-ui  on root");
 
     const keep = work(["--and-keys", `${RIGHT}${DOWN}${CTRL_D}NO\r`], { cwd: join(ws, "app@ui") });

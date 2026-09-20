@@ -701,7 +701,7 @@ describe("worktree view", () => {
     const f = allFrames(out).at(-1)!;
     expect(f.split("\n")[0]).toBe("📁 work › labs › IMG-1234-autofit");
     expect(listOf(f)).toEqual([
-      "→ 📁 cesdk-web     IMG-1234-autofit        on main",
+      "→ 📁 cesdk-web     IMG-1234-autofit        on trunk",
       "  📁 cesdk-web@ui  IMG-1234-autofit-ui     on root",
       "  📁 docs@guide    IMG-1234-autofit-guide  on root",
     ]);
@@ -718,8 +718,8 @@ describe("worktree view", () => {
     const { result, out } = await run(["\x1b[C", "\x1b[B", "\r"], {}, () => [row("root", null, "cesdk-web"), row("spike", "root", "")]);
     expect(result).toEqual({ type: "cd", path: ws().path, workspace: ws().path });
     expect(listOf(allFrames(out).at(-2)!)).toEqual([
-      "→ 📁 cesdk-web  IMG-1234-autofit        on main",
-      "  📁 spike      IMG-1234-autofit-spike  on root  no worktrees",
+      "→ 📁 cesdk-web  IMG-1234-autofit        on trunk",
+      "  📁 spike      IMG-1234-autofit-spike  on root   no worktrees",
     ]);
   });
 
@@ -833,7 +833,7 @@ describe("worktree view", () => {
     const { out } = await run(["\x1b[C", "\x1b[D", "\x1b[C", "\x1b[B"], {}, () => (loads++, rows));
     expect(loads).toBe(1);
     expect(checks).toBe(1);
-    expect(listOf(allFrames(out).at(-1)!)).toEqual(["→ 📁 app  IMG-1234-autofit  on main  *"]);
+    expect(listOf(allFrames(out).at(-1)!)).toEqual(["→ 📁 app  IMG-1234-autofit  on trunk  *"]);
   });
 
   test("long rows drop trailing parts", async () => {

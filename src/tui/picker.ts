@@ -1274,7 +1274,7 @@ function rowName(row: WorktreeRow): string {
 }
 
 function parentLabel(lane: WorktreeRow): string {
-  return `on ${lane.parent ?? "main"}`;
+  return `on ${lane.parent ?? "trunk"}`;
 }
 
 function highlightMatches(text: string, query: string): string {

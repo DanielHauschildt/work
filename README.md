@@ -56,7 +56,7 @@ work archive / unarchive      # <space>/.archive/<workspace>
 work rm ./ui --yes            # remove a lane = all its worktrees (refuses dirty/unpushed without --force)
 work rm ./cesdk-web@ui --yes  # remove a single worktree (a folder of that name wins over a lane of that name)
 work migrate                  # old <lane>/<repo> folders → <repo>[@<lane>] (--all for every workspace)
-work info --json | work ls --json | work path <query> [folder]
+work info --json | work ls --json [--stale] [--archived] | work path <query> [folder]
 ```
 
 ### Picker
@@ -92,8 +92,8 @@ Search: autofit▌
 ──────────────────────────────────────────────────────────
 Search: ▌
 ──────────────────────────────────────────────────────────
-→ 📁 cesdk-web     IMG-1234-autofit        on main
-  📁 docs          IMG-1234-autofit        on main
+→ 📁 cesdk-web     IMG-1234-autofit        on trunk
+  📁 docs          IMG-1234-autofit        on trunk
   📁 cesdk-web@ui  IMG-1234-autofit-ui     on root  *
   📁 docs@guide    IMG-1234-autofit-guide  on root
 ──────────────────────────────────────────────────────────

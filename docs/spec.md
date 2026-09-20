@@ -92,7 +92,7 @@ work . <name> | ./path [name]    new workspace; if the path is a git repo, a wor
 work clone <url> [name] | <url>  new workspace `<prefix>-<owner>-<repo>`; store + worktree in lane root
 work path <query> [folder]       print absolute path of the unique best match (exit 1 if none/ambiguous);
                                  folder = <repo>[@<lane>], or a lane name when it has exactly one worktree
-work ls [--space S] [--json] [--stale]
+work ls [--space S] [--json] [--stale] [--archived]
 work space [ls | new <name> [--prefix P] | set <name> --prefix P]
 work info [workspace] [--json]   lanes with their folders, branches, dirty/unpushed, parents, PRs
 work add <repo|url|path> [branch] [--lane L]   worktree <repo>[@<lane>] (default lane: current, else root)
